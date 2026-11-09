@@ -139,3 +139,12 @@ kbd.big { font: 22px var(--pixel); padding: 12px 16px; border-bottom-width: 5px;
 .g-hunters li { grid-template-columns: 26px 54px 1fr; }
 .g-hunters .g-pw { grid-column: 3; font-size: 12px; color: var(--muted); margin-top: -6px; }
 .g-hunters .g-pw b { color: var(--c); }
+.hunters li.chaser { background: linear-gradient(90deg, rgba(255,255,255,.07), transparent); border-radius: 6px; }
+.hunters li.chaser i { outline: 2px solid #fff; outline-offset: 2px; }
+.g-ping { justify-self: center; width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255,59,92,.8); box-shadow: 0 0 0 5px rgba(255,59,92,.25); }
+.g-chaser { justify-self: center; width: 24px; height: 24px;
+  background:
+    linear-gradient(#fff,#fff) top left / 8px 2px no-repeat, linear-gradient(#fff,#fff) top left / 2px 8px no-repeat,
+    linear-gradient(#fff,#fff) top right / 8px 2px no-repeat, linear-gradient(#fff,#fff) top right / 2px 8px no-repeat,
+    linear-gradient(#fff,#fff) bottom left / 8px 2px no-repeat, linear-gradient(#fff,#fff) bottom left / 2px 8px no-repeat,
+    linear-gradient(#fff,#fff) bottom right / 8px 2px no-repeat, linear-gradient(#fff,#fff) bottom right / 2px 8px no-repeat; }

@@ -12,6 +12,7 @@ const idx = (c, r) => r * COLS + c;
 
 export const JUNCTIONS = FLOOR_TILES.filter(([c, r]) => neighbors(c, r).length >= 3).map((at, i) => ({ id: `J${i + 1}`, at }));
 const JUNCTION_AT = new Map(JUNCTIONS.map((j) => [idx(...j.at), j]));
+export const JUNCTION_BY_ID = new Map(JUNCTIONS.map((j) => [j.id, j]));
 
 /** BFS from a tile: distance to every tile, plus which direction the first step went. */
 export function flood(from) {

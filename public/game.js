@@ -13,13 +13,15 @@
 import {
   MAZE, COLS, ROWS, HUNTERS, DIRS, PLAYER_SPAWN, PULSE_TILES, FLOOR_TILES, isFloor, isOpen, tempWalls, path, neighbors,
 } from "./shared.js";
-import { canSee, flood, nextJunctions, searchCandidates, junctionsVisibleFrom } from "./tactics.js";
+import { canSee, flood, nextJunctions, searchCandidates, junctionsVisibleFrom, JUNCTION_BY_ID } from "./tactics.js";
 import { openGuide } from "./onboarding.js";
 
 const params = new URLSearchParams(location.search);
 const AUTOPILOT = params.has("autopilot"); // a simple bot plays — handy for testing and attract mode
 const LAG_MS = 2000;
-const MIN_DECISION_GAP_MS = 150; // per hunter, so five hunters stay well under ~35 decisions/sec
+const MIN_DECISION_GAP_MS = 150; // the chaser re-decides almost back-to-back
+const COVER_DECISION_GAP_MS = 600; // covers mostly follow the chaser's orders, so they think less often
+const PING_FRESH_MS = 400; // you count as "pinging" while you've moved this recently
 const PLAYER_SPEED = Number(params.get("ps")) || 6.4; // tiles per second
 const HUNTER_SPEED = Number(params.get("hs")) || 6.0; // a touch slower than you: they win by trapping, not racing
 const STUN_MS = 3000;
@@ -75,6 +77,7 @@ const game = {
   revealUntil: 0,
   revealBy: "",
   powerStats: { used: 0, rejected: 0, ai: 0, auto: 0 },
+  orderStats: { ai: 0, auto: 0 },
 };
 
 const key = (c, r) => `${c},${r}`;
@@ -100,6 +103,10 @@ const decisions = []; // rolling metrics
 // shared across the team. Otherwise they work from the last sighting and search.
 const intel = { at: [...PLAYER_SPAWN], heading: null, t: 0, by: [], visible: false };
 const checkedAt = new Map(); // junction id -> last time any hunter had eyes on it
+
+// Every step you take broadcasts your position. The nearest hunter becomes the chaser: the ping wakes
+// it immediately, it plans the route to you and radios orders that send teammates to cover escapes.
+const pings = []; // { at, t0 } for the sonar ripple
 
 // Powers. The model asks for one in its decision; code checks it is legal, telegraphs it for
 // POWER_WINDUP_MS so the player can react, then applies it.
@@ -141,8 +148,10 @@ function resetPositions() {
   checkedAt.clear();
   clearEffects();
   game.revealUntil = 0;
+  game.lastPingAt = 0;
+  pings.length = 0;
   Object.assign(player, { from: [...PLAYER_SPAWN], to: [...PLAYER_SPAWN], t: 0, dir: null, want: null, frozenUntil: 0 });
-  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null, sees: false, alertUntil: 0, powerReadyAt: performance.now() + 4000, powerNote: "", powerNoteUntil: 0 });
+  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null, sees: false, alertUntil: 0, powerReadyAt: performance.now() + 4000, powerNote: "", powerNoteUntil: 0, role: "cover", order: null });
 }
 
 function newGame() {
@@ -229,6 +238,7 @@ function movePlayer(dt) {
     player.t -= 1;
     player.from = player.to;
     arrive(player.from);
+    ping(player.from);
     if (AUTOPILOT) player.want = autopilot();
     if (open(player.from, player.want)) player.dir = player.want;
     if (open(player.from, player.dir)) player.to = add(player.from, player.dir);
@@ -319,7 +329,13 @@ async function brain(h) {
 
     if (ok && epoch === game.epoch && game.phase === "play") {
       const d = body.decision;
-      h.target = [d.col, d.row];
+      // a cover that got fresh orders while this decision was in flight keeps the orders
+      const overtaken = h.role === "cover" && h.order && h.order.t > t0;
+      if (!overtaken) h.target = [d.col, d.row];
+      if (h.role === "chaser" && state.role === "chaser") {
+        const given = giveOrders(h, d.orders, "ai");
+        if (!given) giveOrders(h, autoOrders(h, state), "auto");
+      }
       h.intent = d.intent;
       h.lastReact = Math.round(react);
       h.lastWafer = body.timing?.totalMs;
@@ -330,8 +346,101 @@ async function brain(h) {
       h.intent = `⚠ ${body.error || "error"}`;
       await sleep((body.retryAfter || 1) * 1000);
     }
-    await sleep(Math.max(0, MIN_DECISION_GAP_MS - (performance.now() - t0)));
+    const gap = h.role === "chaser" ? MIN_DECISION_GAP_MS : COVER_DECISION_GAP_MS;
+    await sleepOrWake(h, Math.max(0, gap - (performance.now() - t0)));
   }
+}
+
+// A hunter's loop sleeps between decisions, but a ping can wake it early. If it's mid-request,
+// the wake is remembered and it re-decides as soon as the current answer lands.
+function wake(h) {
+  h.wakeRequested = true;
+  h.wakeResolve?.();
+}
+function sleepOrWake(h, ms) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      h.wakeResolve = null;
+      h.wakeRequested = false;
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    h.wakeResolve = done;
+    if (h.wakeRequested) done();
+  });
+}
+
+function ping(tile) {
+  const now = performance.now();
+  game.lastPingAt = now;
+  pings.push({ at: [...tile], t0: now });
+  // the nearest hunter by real path length becomes the chaser (with a little hysteresis so it
+  // doesn't flip every step between two hunters at the same distance)
+  const f = flood(tile);
+  const current = hunters.find((x) => x.role === "chaser");
+  let best = null;
+  for (const h of hunters) {
+    if (h.stunUntil > now) continue;
+    const d = f.dist(tileOf(h));
+    if (d >= 0 && (!best || d < best.d)) best = { h, d };
+  }
+  if (!best) return;
+  const curD = current && current.stunUntil <= now ? f.dist(tileOf(current)) : Infinity;
+  const chaser = current && curD >= 0 && curD <= best.d + 2 ? current : best.h;
+  if (chaser !== current) {
+    for (const h of hunters) h.role = h === chaser ? "chaser" : "cover";
+    chaser.order = null;
+  }
+  wake(chaser);
+}
+
+function giveOrders(chaser, orders, source) {
+  if (!Array.isArray(orders)) return 0;
+  const now = performance.now();
+  const given = [];
+  const taken = new Set([String(chaser.target)]); // one hunter per junction, and not where the chaser is going
+  const assigned = new Set();
+  for (const o of orders.slice(0, 4)) {
+    const mate = hunters.find((x) => x !== chaser && x.name.toLowerCase() === String(o.name || "").toLowerCase());
+    const j = JUNCTION_BY_ID.get(String(o.junction || "").toUpperCase());
+    if (!mate || !j || assigned.has(mate) || taken.has(String(j.at))) continue;
+    assigned.add(mate);
+    taken.add(String(j.at));
+    mate.target = [...j.at];
+    mate.order = { junction: j.id, at: j.at, from: chaser.name, t: now };
+    mate.intent = `cover ${j.id} (${chaser.name}'s call)`;
+    given.push(`${mate.name} → ${j.id}`);
+  }
+  // a new round of orders replaces the old one; anyone not named this round is free again
+  if (given.length) for (const x of hunters) if (x !== chaser && !assigned.has(x)) x.order = null;
+  const text = `📡 ${given.join(" · ")}`;
+  if (given.length && text !== chaser.lastOrders) say(chaser, text); // only announce changes
+  if (given.length) (chaser.lastOrders = text), (game.orderStats[source] += 1);
+  return given.length;
+}
+
+// Fallback when the chaser gives no orders: each escape junction (from the same snapshot the chaser
+// decided on) goes to the nearest teammate who is not already assigned.
+function autoOrders(chaser, state) {
+  const pl = state.player;
+  const spots =
+    pl.status === "visible"
+      ? [...pl.escapes].sort((a, b) => b.alongHeading - a.alongHeading || a.playerDist - b.playerDist).map((e) => e.junction)
+      : pl.candidates.map((c) => c.junction);
+  const free = hunters.filter((x) => x !== chaser && x.stunUntil <= performance.now());
+  const out = [];
+  for (const id of spots) {
+    const j = JUNCTION_BY_ID.get(id);
+    let best = null;
+    for (const m of free) {
+      if (out.some((o) => o.name === m.name)) continue;
+      const d = flood(tileOf(m)).dist(j.at);
+      if (d >= 0 && (!best || d < best.d)) best = { m, d };
+    }
+    if (best) out.push({ name: best.m.name, junction: id });
+  }
+  return out;
 }
 
 const HUNTER_TPS = () => HUNTER_SPEED * (1 + 0.06 * (game.level - 1));
@@ -351,6 +460,7 @@ function updateIntel(now) {
   const flare = fx.flares.find((f) => Math.hypot(f.at[0] - px, f.at[1] - py) <= f.radius);
   if (flare) seers.push(`${flare.owner.name}'s flare`);
   if (game.revealUntil > now) seers.push(game.revealBy);
+  if (now - game.lastPingAt < PING_FRESH_MS) seers.push("ping");
   const moving = player.from[0] !== player.to[0] || player.from[1] !== player.to[1];
   if (seers.length) Object.assign(intel, { at: pt, heading: moving ? player.dir : null, t: now, by: seers, visible: true });
   else intel.visible = false;
@@ -423,6 +533,10 @@ function snapshot(h) {
   return {
     t: Math.round((now - game.startedAt) / 100) / 10,
     you: { name: h.name, at: me, target: h.target, stunned: h.stunUntil > now, seesPlayer: h.sees },
+    role: h.role,
+    ...(h.role === "cover" && h.order
+      ? { yourOrder: { junction: h.order.junction, at: h.order.at, from: h.order.from, secondsAgo: Math.round((now - h.order.t) / 100) / 10 } }
+      : {}),
     yourPower: {
       name: h.power.name,
       ready: now >= h.powerReadyAt && h.stunUntil <= now,
@@ -723,6 +837,20 @@ function draw(now) {
 
   drawEffects(now);
 
+  // sonar ripples: every step you take is broadcast
+  for (let i = pings.length - 1; i >= 0; i--) {
+    const age = (now - pings[i].t0) / 700;
+    if (age > 1) {
+      pings.splice(i, 1);
+      continue;
+    }
+    ctx.strokeStyle = `rgba(255,59,92,${0.55 * (1 - age)})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx(pings[i].at[0]), cx(pings[i].at[1]), 6 + age * 22, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
   // AI plans: a dashed line from each hunter to the tile it decided to go to
   if (game.showPlans && game.phase === "play") {
     ctx.shadowBlur = 0;
@@ -823,6 +951,17 @@ function draw(now) {
     circle(hx + ex * 3, hy + ey * 3, 3.6);
     ctx.fillStyle = "#fff";
     circle(hx + ex * 4, hy + ey * 4, 1.4);
+    if (h.role === "chaser" && game.phase === "play") {
+      // crosshair brackets mark the chaser
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      const r = 15, k = 5;
+      ctx.beginPath();
+      for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        ctx.moveTo(hx + sx * r, hy + sy * (r - k)), ctx.lineTo(hx + sx * r, hy + sy * r), ctx.lineTo(hx + sx * (r - k), hy + sy * r);
+      }
+      ctx.stroke();
+    }
     if (h.alertUntil > now) {
       ctx.fillStyle = "#fff";
       ctx.shadowBlur = 10;
@@ -888,9 +1027,12 @@ function draw(now) {
   else if (game.phase === "clear") banner("BOARD CLEAR", `LEVEL ${game.level + 1} · HUNTERS GET FASTER`, "#4dffb0");
   else if (game.paused) banner("PAUSED", "P TO RESUME", "#7c84a3");
   if (game.phase === "play") {
-    const label = intel.visible
-      ? `SPOTTED · ${intel.by.join(", ")}`
-      : `HIDDEN ${((now - intel.t) / 1000).toFixed(1)}s`;
+    const sighted = intel.by.filter((b) => b !== "ping");
+    const label = !intel.visible
+      ? `SILENT ${((now - intel.t) / 1000).toFixed(1)}s`
+      : sighted.length
+        ? `SPOTTED · ${sighted.join(", ")}`
+        : "PINGING · stand still to go silent";
     ctx.font = "10px 'Press Start 2P', monospace";
     const w = ctx.measureText(label).width + 20;
     ctx.fillStyle = intel.visible ? "rgba(60,8,18,.85)" : "rgba(6,30,22,.85)";
@@ -1101,6 +1243,7 @@ setInterval(() => {
     pw.classList.toggle("ready", left <= 0);
     pw.style.setProperty("--c", h.color);
     li.querySelector(".ms").textContent = ms(h.lastReact);
+    li.classList.toggle("chaser", h.role === "chaser" && game.phase === "play");
   }
 }, 250);
 

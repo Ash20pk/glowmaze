@@ -168,6 +168,9 @@ async function decide(req, res) {
     radio: String(decision.radio || "")
       .replace(new RegExp(`^\\s*${NAMES[hunterId]}\\s*(here)?\\s*[:,-]\\s*`, "i"), "")
       .slice(0, 80),
+    orders: (Array.isArray(decision.orders) ? decision.orders : [])
+      .slice(0, 4)
+      .map((o) => ({ name: String(o?.name || "").slice(0, 12), junction: String(o?.junction || "").slice(0, 4) })),
     usePower: decision.usePower === true,
     ...(decision.usePower === true
       ? (([pc, pr]) => ({ powerCol: pc, powerRow: pr }))(nearestFloor(Math.round(decision.powerCol), Math.round(decision.powerRow)))

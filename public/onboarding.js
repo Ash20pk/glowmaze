@@ -39,16 +39,17 @@ const STEPS = [
     body: `<p>Nothing here is scripted. Every move each hunter makes is decided <b class="ok">live by an AI model on Wafer</b>, several times a second. The AI decides where each one goes, when to use its power, and how to combine powers with the team. A power <b>flashes for half a second</b> before it lands, so watch for the warning.</p>`,
   },
   {
-    kicker: "3 / 5 · stealth",
-    title: "BREAK THEIR LINE OF SIGHT",
+    kicker: "3 / 5 · the chase",
+    title: "EVERY MOVE GIVES YOU AWAY",
     art: `<ul class="g-legend">
-      <li><span class="g-sight"></span><span><b>Sight line</b>: a hunter can see you</span></li>
-      <li><span class="g-q">?</span><span><b>Last seen</b>: where the team last spotted you</span></li>
-      <li><span class="g-plan"></span><span><b>Plan</b>: where a hunter has decided to go</span></li>
+      <li><span class="g-ping"></span><span><b>Ping</b>: each step broadcasts where you are to every hunter</span></li>
+      <li><span class="g-chaser"></span><span><b>Chaser</b>: the nearest hunter. Every ping wakes it to re-plan, and it radios orders 📡 sending the others to cover your escapes</span></li>
+      <li><span class="g-sight"></span><span><b>Sight line</b>: a hunter can see you down a straight corridor</span></li>
+      <li><span class="g-q">?</span><span><b>Last known</b>: where they last placed you</span></li>
     </ul>`,
     body: `
-      <p>Hunters only see you down a <b>straight corridor</b>, or when you're right next to them. Duck around a corner and they lose you.</p>
-      <p>They share every sighting on the radio, then split up and <b>search where you could have gone</b>. The badge in the top corner tells you if you're <b class="hot">SPOTTED</b> or <b class="ok">HIDDEN</b>.</p>`,
+      <p>While you move you're <b class="hot">PINGING</b>, and the team always knows where you are. <b class="ok">Stand still</b> and you go <b class="ok">SILENT</b>: then they can only find you by sight, and have to search.</p>
+      <p>But sparks don't collect themselves. Move in bursts, break line of sight, and go quiet when they close in.</p>`,
   },
   {
     kicker: "4 / 5 · controls",

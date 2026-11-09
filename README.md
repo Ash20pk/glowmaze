@@ -47,6 +47,15 @@ No LLM can steer a character 60 times a second, and it shouldn't try. Glowmaze s
 - **Personalities come from the prompt alone.** Rook presses you, Vex intercepts, Moth guards the sparks, Grim herds you toward the others, and Pip fills the gaps. There's no hand-coded strategy.
 - **Decisions are made from a snapshot, so latency matters.** Everything moves while the request is in flight. At ~800ms you've moved about 5 tiles by the time a decision lands, which is close enough for the hunters' predictions to cover it. Add 2s and you're 18 tiles away, and powers land late too: Rook's wall drops where you were.
 
+### Every move pings you; the nearest hunter leads
+
+Each step you take broadcasts your position to every hunter, shown as a red sonar ripple. The hunter nearest to the ping by real path length becomes the **chaser**, marked with white crosshair brackets. There's a small hysteresis so the role doesn't flicker between two equally close hunters.
+
+- **Pings are events, not polling.** A ping wakes the chaser immediately. If it's mid-request, it re-plans the moment that answer lands. The chaser decides almost back-to-back, while the other hunters (**covers**) decide every ~600ms on top of their response time.
+- **One call coordinates the team.** The chaser's JSON includes `orders`, such as `[{"name": "Vex", "junction": "J37"}, …]`. They're applied instantly: each named teammate gets that junction as its target and the order appears on the radio as 📡 *Vex → J37 · Pip → J12*. A cover's own later decision can't override a newer order with stale reasoning.
+- **Orders are cleaned up in code.** There's one hunter per junction, and a new round replaces the old one. If the chaser gives no orders, each escape junction goes to the nearest free teammate, using the same snapshot. In a 40-second test that was 9 rounds from the model and 13 from the fallback.
+- **Standing still is your only stealth.** No movement means no ping. Then the hunters only find you by sight, and the badge flips from **PINGING** to **SILENT**.
+
 ### Fog of war: they have to find you
 
 Hunters see you only down a straight, unbroken corridor, or when they're right next to you. Every sighting is shared with the whole team. When nobody can see you, the hunters only know where you were last seen and which way you were heading. On screen:

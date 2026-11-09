@@ -34,6 +34,10 @@ http
       row: pick[1],
       radio: Math.random() < 0.12 ? `moving to ${pick[0]},${pick[1]}` : "",
       // use the power now and then, aimed at the same place (the game rejects illegal uses)
+      orders:
+        s.role === "chaser" && s.player.status === "visible"
+          ? s.teammates.slice(0, s.player.escapes.length).map((t, i) => ({ name: t.name, junction: s.player.escapes[i].junction }))
+          : [],
       usePower: !!s.yourPower?.ready && Math.random() < 0.3,
       powerCol: pick[0],
       powerRow: pick[1],
