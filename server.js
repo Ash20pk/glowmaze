@@ -9,7 +9,7 @@
 
 import http from "node:http";
 import { readFile, appendFile, mkdir } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nearestFloor, HUNTERS } from "./public/shared.js";
@@ -27,6 +27,12 @@ const MODEL = process.env.WAFER_MODEL || "DeepSeek-V4-Flash-0731-Fast";
 const EFFORT = process.env.WAFER_REASONING_EFFORT || "none";
 const MAX_PER_MIN = Number(process.env.MAX_DECISIONS_PER_MIN || 1500); // spend guard
 const LOG = join(ROOT, "logs", "decisions.jsonl");
+
+// The server reads prompt.js and shared.js once at startup. If they change while it runs, the page
+// (served fresh) and the AI's instructions drift apart, so the page is told to ask for a restart.
+const SERVER_FILES = ["server.js", "prompt.js", "public/shared.js"].map((f) => join(ROOT, f));
+const codeSignature = () => SERVER_FILES.map((f) => statSync(f).mtimeMs).join(",");
+const STARTED_WITH = codeSignature();
 
 if (!KEY) {
   console.error("Missing WAFER_API_KEY. Copy .env.example to .env and add a key from https://app.wafer.ai");
@@ -59,7 +65,7 @@ http
       const url = new URL(req.url, `http://${req.headers.host}`);
       if (req.method === "POST" && url.pathname === "/api/decide") return await decide(req, res);
       if (req.method === "GET" && url.pathname === "/api/config")
-        return json(res, 200, { model: MODEL, reasoningEffort: EFFORT });
+        return json(res, 200, { model: MODEL, reasoningEffort: EFFORT, stale: codeSignature() !== STARTED_WITH });
       if (req.method === "GET") return await serveStatic(url.pathname, res);
       json(res, 405, { error: "method not allowed" });
     } catch (err) {

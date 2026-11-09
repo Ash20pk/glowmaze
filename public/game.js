@@ -48,7 +48,12 @@ addEventListener("resize", resize);
 const $ = (id) => document.getElementById(id);
 fetch("/api/config")
   .then((r) => r.json())
-  .then((c) => ($("model").textContent = c.model))
+  .then((c) => {
+    $("model").textContent = c.model;
+    if (c.stale) {
+      $("model").innerHTML = `${c.model}<br><b style="color:#ff3b5c">⚠ The server is running old code. Restart it (Ctrl+C, then npm start).</b>`;
+    }
+  })
   .catch(() => ($("model").textContent = "server offline"));
 
 // ---------- state ----------
@@ -69,7 +74,7 @@ const game = {
   pulseFx: null,
   revealUntil: 0,
   revealBy: "",
-  powerStats: { used: 0, rejected: 0 },
+  powerStats: { used: 0, rejected: 0, ai: 0, auto: 0 },
 };
 
 const key = (c, r) => `${c},${r}`;
@@ -319,7 +324,8 @@ async function brain(h) {
       h.lastReact = Math.round(react);
       h.lastWafer = body.timing?.totalMs;
       if (d.radio) say(h, d.radio);
-      if (d.usePower) requestPower(h, d, performance.now());
+      if (d.usePower) requestPower(h, [d.powerCol, d.powerRow], performance.now(), "ai");
+      else autoPower(h, state, performance.now());
     } else if (!ok) {
       h.intent = `⚠ ${body.error || "error"}`;
       await sleep((body.retryAfter || 1) * 1000);
@@ -478,18 +484,48 @@ function invalidPower(h, id, at) {
   return null;
 }
 
-function requestPower(h, d, now) {
-  const at = [d.powerCol, d.powerRow];
+function requestPower(h, at, now, source) {
   const why =
     now < h.powerReadyAt ? "still cooling down" : h.stunUntil > now ? "stunned" : invalidPower(h, h.power.id, at);
   if (why) {
     h.powerNote = `${SHORT[h.power.id]} rejected: ${why}`;
     h.powerNoteUntil = now + 3000;
     game.powerStats.rejected++;
-    return;
+    return false;
   }
   h.powerReadyAt = now + h.power.cooldown * 1000;
-  fx.pending.push({ owner: h, power: h.power, at, fireAt: now + POWER_WINDUP_MS, epoch: game.epoch });
+  fx.pending.push({ owner: h, power: h.power, at, fireAt: now + POWER_WINDUP_MS, epoch: game.epoch, source });
+  game.powerStats[source]++;
+  if (source === "auto") (h.powerNote = `${SHORT[h.power.id]} (auto)`), (h.powerNoteUntil = now + 2500);
+  return true;
+}
+
+// Fallback so powers actually get used: if the model has left a ready power unused for
+// AUTO_POWER_AFTER_MS, fire it at a target chosen by simple rules. Targets come from the same
+// snapshot the decision was based on, so with the lag switch on, auto powers land late too.
+const AUTO_POWER_AFTER_MS = 1500;
+function autoPower(h, state, now) {
+  if (now - h.powerReadyAt < AUTO_POWER_AFTER_MS || h.stunUntil > now) return;
+  if (fx.pending.some((p) => p.owner === h)) return;
+  const pl = state.player;
+  let picks = [];
+  if (pl.status === "visible") {
+    const escapes = [...pl.escapes].sort((a, b) => b.alongHeading - a.alongHeading || a.playerDist - b.playerDist);
+    const ahead = escapes.map((e) => e.at);
+    picks = {
+      wall: ahead, // seal where they're running
+      blink: [...escapes.filter((e) => !e.youArriveFirst).map((e) => e.at), ...ahead], // appear where you can't run to in time
+      sludge: [pl.in3Tiles, pl.in6Tiles, ...ahead],
+      snare: [pl.in6Tiles, ...ahead],
+      flare: [], // pointless when they're already seen
+    }[h.power.id];
+  } else {
+    const likely = pl.candidates.map((c) => c.at);
+    picks = h.power.id === "flare" || h.power.id === "blink" || h.power.id === "snare" ? likely : [];
+  }
+  for (const at of picks) {
+    if (at && !invalidPower(h, h.power.id, at)) return void requestPower(h, at, now, "auto");
+  }
 }
 
 function firePower(p, now) {

@@ -65,7 +65,7 @@ Hunters see you only down a straight, unbroken corridor, or when they're right n
 | Grim | Sludge | Up to 5 tiles of corridor at half speed for you, for 6s | 15s |
 | Pip | Snare | A hidden trap for 20s; stepping on it freezes you for 1.5s and reveals you | 20s |
 
-The model decides when and where to use a power (`usePower`, `powerCol`, `powerRow` in its JSON reply). Every decision includes whether the hunter's power is ready, the teammates' power status, and the active effects, so hunters set up combos on the radio ("Wall at J39, Vex blink there too").
+The model decides when and where to use a power (`usePower`, `powerCol`, `powerRow` in its JSON reply). If a power has been ready for 1.5s and the model hasn't used it, the game fires it automatically at a target picked by simple rules: an escape junction ahead of you, the corridor you're running down, or the most likely hiding spot. That target comes from the same snapshot the hunter's decision was based on, so automatic powers are just as late as everything else when the lag switch is on. The HUD labels them "(auto)". In testing, the model chose 11 of 12 powers itself. Every decision includes whether the hunter's power is ready, the teammates' power status, and the active effects, so hunters set up combos on the radio ("Wall at J39, Vex blink there too").
 
 **The rules are enforced in code, not trusted to the model.**
 - A wall can't land within 3 tiles of you, on anyone, or anywhere that would cut you off from most of the maze.
