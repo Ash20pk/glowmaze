@@ -24,7 +24,7 @@ http
       Vex: s.player.in6Tiles,
       Moth: s.sparks.nearestToPlayer ?? s.player.at,
       Grim: s.player.at,
-      Pip: [20 - s.player.at[0], s.player.at[1]],
+      Pip: [36 - s.player.at[0], s.player.at[1]],
     }[who] ?? s.player.at;
     const decision = {
       intent: { Rook: "press the player", Vex: "cut off ahead", Moth: "guard the sparks", Grim: "herd from behind", Pip: "cover the mirror lane" }[who],

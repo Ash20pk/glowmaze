@@ -11,50 +11,50 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <main class="wrap">
-    <header class="top">
-      <h1>GLOW<span>MAZE</span></h1>
-      <p class="sub">five hunters · every move decided live by <b>Wafer</b> · <span id="model">…</span></p>
-    </header>
-
-    <div class="layout">
-      <section class="cabinet">
+  <main class="app">
+    <section class="play">
+      <header class="top">
+        <h1>GLOW<span>MAZE</span></h1>
         <div class="score">
           <span>SCORE <b id="score">0</b></span>
           <span>LEVEL <b id="level">1</b></span>
           <span>LIVES <b id="lives">♥♥♥</b></span>
           <span>PULSE <b id="pulse">●</b></span>
         </div>
-        <div class="screen">
+      </header>
+      <div class="screen" id="screen">
+        <div class="tube">
           <canvas id="game"></canvas>
           <div class="crt" aria-hidden="true"></div>
         </div>
-        <p class="keys">arrows / WASD move · SPACE pulse · L lag · T plans · P pause</p>
-      </section>
+      </div>
+      <p class="keys">arrows / WASD move · SPACE pulse · L lag · T plans · F fullscreen · P pause</p>
+    </section>
 
-      <aside class="hud">
-        <button id="lag" class="lag" aria-pressed="false">
-          <span class="lag-label">INFERENCE</span>
-          <span class="lag-state" id="lagState">LIVE</span>
-          <span class="lag-hint">press L to add 2s of lag</span>
-        </button>
+    <aside class="hud">
+      <p class="sub">five hunters, every move decided live by <b>Wafer</b><br /><span id="model">…</span></p>
 
-        <div class="stats">
-          <div class="stat"><span>AI reaction p50</span><b id="sReact">—</b></div>
-          <div class="stat"><span>Wafer latency p50 / p95</span><b id="sLat">—</b></div>
-          <div class="stat"><span>first token p50</span><b id="sTtft">—</b></div>
-          <div class="stat"><span>decisions / sec</span><b id="sRate">—</b></div>
-          <div class="stat"><span>prompt cached</span><b id="sCache">—</b></div>
-          <div class="stat"><span>errors (10s)</span><b id="sErr">0</b></div>
-        </div>
+      <button id="lag" class="lag" aria-pressed="false">
+        <span class="lag-label">INFERENCE</span>
+        <span class="lag-state" id="lagState">LIVE</span>
+        <span class="lag-hint">press L to add 2s of lag</span>
+      </button>
 
-        <h2>Hunters</h2>
-        <ol class="hunters" id="hunters"></ol>
+      <div class="stats">
+        <div class="stat"><span>AI reaction p50</span><b id="sReact">—</b></div>
+        <div class="stat"><span>Wafer p50 / p95</span><b id="sLat">—</b></div>
+        <div class="stat"><span>first token p50</span><b id="sTtft">—</b></div>
+        <div class="stat"><span>decisions / sec</span><b id="sRate">—</b></div>
+        <div class="stat"><span>prompt cached</span><b id="sCache">—</b></div>
+        <div class="stat"><span>errors (10s)</span><b id="sErr">0</b></div>
+      </div>
 
-        <h2>Team radio</h2>
-        <ol class="radio" id="radio"></ol>
-      </aside>
-    </div>
+      <h2>Hunters</h2>
+      <ol class="hunters" id="hunters"></ol>
+
+      <h2>Team radio</h2>
+      <ol class="radio" id="radio"></ol>
+    </aside>
   </main>
   <script type="module" src="/game.js"></script>
 </body>

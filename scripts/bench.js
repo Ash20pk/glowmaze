@@ -28,16 +28,16 @@ if (!models.length)
 
 const STATE = {
   t: 23.4,
-  you: { name: "Vex", at: [11, 7], target: [15, 11], stunned: false },
-  player: { at: [5, 11], heading: "right", in3Tiles: [8, 11], in6Tiles: [11, 11], pathDistanceToYou: 10, pulseCharges: 1 },
+  you: { name: "Vex", at: [20, 11], target: [24, 13], stunned: false },
+  player: { at: [9, 17], heading: "right", in3Tiles: [11, 17], in6Tiles: [11, 15], pathDistanceToYou: 17, pulseCharges: 1 },
   teammates: [
-    { name: "Rook", at: [3, 11], target: [6, 11], intent: "chase from behind", stunned: false },
-    { name: "Moth", at: [15, 13], target: [14, 13], intent: "guard south-east sparks", stunned: false },
-    { name: "Grim", at: [5, 7], target: [5, 9], intent: "block the north exit", stunned: false },
-    { name: "Pip", at: [17, 3], target: [15, 7], intent: "drift toward center", stunned: false },
+    { name: "Rook", at: [5, 17], target: [8, 17], intent: "chase from behind", stunned: false },
+    { name: "Moth", at: [24, 19], target: [22, 19], intent: "guard south-east sparks", stunned: false },
+    { name: "Grim", at: [9, 11], target: [9, 13], intent: "block the north exit", stunned: false },
+    { name: "Pip", at: [31, 5], target: [25, 7], intent: "drift toward center", stunned: false },
   ],
-  radio: ["Rook: he's running east on row 11", "Grim: I've got the north side"],
-  sparks: { left: 96, byArea: { NW: 18, NE: 27, SW: 22, SE: 29 }, nearestToPlayer: [6, 11] },
+  radio: ["Rook: he's running east on row 17", "Grim: I've got the north side"],
+  sparks: { left: 380, byArea: { NW: 92, NE: 99, SW: 91, SE: 98 }, nearestToPlayer: [10, 17] },
 };
 
 async function once(model, attempt = 0) {

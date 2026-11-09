@@ -24,14 +24,24 @@ const STUN_MS = 3000;
 const PULSE_RADIUS = 5;
 
 // ---------- canvas ----------
+// Everything is drawn in logical units of TILE px per tile, then scaled to fill the screen.
 const TILE = 30;
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const DPR = Math.min(2, window.devicePixelRatio || 1);
-canvas.width = COLS * TILE * DPR;
-canvas.height = ROWS * TILE * DPR;
-canvas.style.width = `${COLS * TILE}px`;
-ctx.scale(DPR, DPR);
+let wallLayer;
+
+function resize() {
+  const box = document.getElementById("screen");
+  const scale = Math.min(box.clientWidth / (COLS * TILE), box.clientHeight / (ROWS * TILE));
+  canvas.width = Math.round(COLS * TILE * scale * DPR);
+  canvas.height = Math.round(ROWS * TILE * scale * DPR);
+  canvas.style.width = `${Math.round(COLS * TILE * scale)}px`;
+  canvas.style.height = `${Math.round(ROWS * TILE * scale)}px`;
+  ctx.setTransform(DPR * scale, 0, 0, DPR * scale, 0, 0);
+  wallLayer = buildWalls(DPR * scale);
+}
+addEventListener("resize", resize);
 
 const $ = (id) => document.getElementById(id);
 fetch("/api/config")
@@ -112,6 +122,7 @@ addEventListener("keydown", (e) => {
   } else if (k === "l") toggleLag();
   else if (k === "t") game.showPlans = !game.showPlans;
   else if (k === "p" || k === "Escape") game.paused = !game.paused;
+  else if (k === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
 $("lag").onclick = toggleLag;
 document.addEventListener("visibilitychange", () => document.hidden && (game.paused = true));
@@ -375,32 +386,34 @@ function update(dt, now) {
 }
 
 // ---------- drawing ----------
-const wallLayer = (() => {
+function buildWalls(pxPerUnit) {
   const c = document.createElement("canvas");
-  c.width = COLS * TILE * DPR;
-  c.height = ROWS * TILE * DPR;
+  c.width = Math.round(COLS * TILE * pxPerUnit);
+  c.height = Math.round(ROWS * TILE * pxPerUnit);
   const g = c.getContext("2d");
-  g.scale(DPR, DPR);
+  g.scale(pxPerUnit, pxPerUnit);
   g.strokeStyle = "#2f6bff";
   g.lineWidth = 2;
   g.lineCap = "round";
   g.shadowColor = "#2f6bff";
   g.shadowBlur = 12;
-  const inset = 7;
+  // Walls are one tile thick, so draw each as a single neon line through the middle of the wall,
+  // joining neighbouring wall tiles. A lone wall post becomes a short bar.
+  const isWall = (c, r) => c >= 0 && r >= 0 && c < COLS && r < ROWS && !isFloor(c, r);
+  const mid = (v) => v * TILE + TILE / 2;
+  g.lineWidth = 3;
+  g.beginPath();
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++) {
-      if (isFloor(c, r)) continue;
-      const x = c * TILE;
-      const y = r * TILE;
-      g.beginPath();
-      if (isFloor(c, r - 1)) g.moveTo(x, y + inset), g.lineTo(x + TILE, y + inset);
-      if (isFloor(c, r + 1)) g.moveTo(x, y + TILE - inset), g.lineTo(x + TILE, y + TILE - inset);
-      if (isFloor(c - 1, r)) g.moveTo(x + inset, y), g.lineTo(x + inset, y + TILE);
-      if (isFloor(c + 1, r)) g.moveTo(x + TILE - inset, y), g.lineTo(x + TILE - inset, y + TILE);
-      g.stroke();
+      if (!isWall(c, r)) continue;
+      if (isWall(c + 1, r)) g.moveTo(mid(c), mid(r)), g.lineTo(mid(c + 1), mid(r));
+      if (isWall(c, r + 1)) g.moveTo(mid(c), mid(r)), g.lineTo(mid(c), mid(r + 1));
+      if (!isWall(c + 1, r) && !isWall(c - 1, r) && !isWall(c, r + 1) && !isWall(c, r - 1))
+        g.moveTo(mid(c) - 6, mid(r)), g.lineTo(mid(c) + 6, mid(r));
     }
+  g.stroke();
   return c;
-})();
+}
 
 function draw(now) {
   ctx.fillStyle = "#020309";
@@ -624,6 +637,7 @@ setInterval(() => {
 }, 250);
 
 // ---------- go ----------
+resize();
 resetBoard();
 renderRadio();
 hunters.forEach(brain);
