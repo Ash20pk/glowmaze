@@ -13,6 +13,8 @@
 import {
   MAZE, COLS, ROWS, HUNTERS, DIRS, PLAYER_SPAWN, PULSE_TILES, isFloor, path, neighbors,
 } from "./shared.js";
+import { canSee, flood, nextJunctions, searchCandidates, junctionsVisibleFrom } from "./tactics.js";
+import { openGuide } from "./onboarding.js";
 
 const params = new URLSearchParams(location.search);
 const AUTOPILOT = params.has("autopilot"); // a simple bot plays — handy for testing and attract mode
@@ -86,6 +88,11 @@ const hunters = HUNTERS.map((h) => ({
 const radioLog = [];
 const decisions = []; // rolling metrics
 
+// Fog of war. Hunters only know where the player is when one of them can see them; sightings are
+// shared across the team. Otherwise they work from the last sighting and search.
+const intel = { at: [...PLAYER_SPAWN], heading: null, t: 0, by: [], visible: false };
+const checkedAt = new Map(); // junction id -> last time any hunter had eyes on it
+
 function resetBoard() {
   game.sparks.clear();
   game.pulseTiles = new Set(PULSE_TILES.map((t) => key(...t)));
@@ -96,8 +103,10 @@ function resetBoard() {
 
 function resetPositions() {
   game.epoch++;
+  Object.assign(intel, { at: [...PLAYER_SPAWN], heading: null, t: performance.now(), by: ["respawn"], visible: false });
+  checkedAt.clear();
   Object.assign(player, { from: [...PLAYER_SPAWN], to: [...PLAYER_SPAWN], t: 0, dir: null, want: null });
-  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null });
+  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null, sees: false, alertUntil: 0 });
 }
 
 function newGame() {
@@ -111,6 +120,7 @@ function newGame() {
 // ---------- input ----------
 const KEYMAP = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", w: "up", s: "down", a: "left", d: "right" };
 addEventListener("keydown", (e) => {
+  if (game.phase === "guide") return; // the onboarding screens handle their own keys
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (KEYMAP[k]) {
     player.want = KEYMAP[k];
@@ -122,6 +132,7 @@ addEventListener("keydown", (e) => {
   } else if (k === "l") toggleLag();
   else if (k === "t") game.showPlans = !game.showPlans;
   else if (k === "p" || k === "Escape") game.paused = !game.paused;
+  else if (k === "h") showGuide();
   else if (k === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 });
 $("lag").onclick = toggleLag;
@@ -268,34 +279,98 @@ async function brain(h) {
   }
 }
 
+const HUNTER_TPS = () => HUNTER_SPEED * (1 + 0.06 * (game.level - 1));
+
+function updateIntel(now) {
+  const pt = tileOf(player);
+  const seers = [];
+  for (const h of hunters) {
+    const ht = tileOf(h);
+    for (const j of junctionsVisibleFrom(ht)) checkedAt.set(j.id, now);
+    const sees = h.stunUntil <= now && canSee(ht, pt);
+    if (sees && !h.sees) h.alertUntil = now + 900; // the "!" when a hunter spots you
+    h.sees = sees;
+    if (sees) seers.push(h.name);
+  }
+  const moving = player.from[0] !== player.to[0] || player.from[1] !== player.to[1];
+  if (seers.length) Object.assign(intel, { at: pt, heading: moving ? player.dir : null, t: now, by: seers, visible: true });
+  else intel.visible = false;
+}
+
+// What one hunter knows when it asks for a decision. The geometry is precomputed so the model
+// only has to judge: which escape route to claim, or where to search.
 function snapshot(h) {
+  const now = performance.now();
   const me = tileOf(h);
-  const p = tileOf(player);
+  const mine = flood(me);
+  const mates = hunters.filter((x) => x !== h).map((x) => ({ h: x, f: flood(tileOf(x)) }));
+  const closestMate = (t) => {
+    let best = null;
+    for (const m of mates) {
+      const d = m.f.dist(t);
+      if (d >= 0 && (!best || d < best.dist)) best = { name: m.h.name, dist: d };
+    }
+    return best;
+  };
+
+  let playerInfo;
+  if (intel.visible) {
+    const p = intel.at;
+    playerInfo = {
+      status: "visible",
+      seenBy: intel.by,
+      at: p,
+      heading: intel.heading ?? "stopped",
+      in3Tiles: project(3),
+      in6Tiles: project(6),
+      distanceToYou: mine.dist(p),
+      escapes: nextJunctions(p).map((e) => {
+        const you = mine.dist(e.junction.at);
+        return {
+          junction: e.junction.id,
+          at: e.junction.at,
+          playerDist: e.dist,
+          alongHeading: e.firstDir === intel.heading,
+          you,
+          youArriveFirst: you / HUNTER_TPS() < e.dist / PLAYER_SPEED,
+          closestTeammate: closestMate(e.junction.at),
+        };
+      }),
+    };
+  } else {
+    const ago = (now - intel.t) / 1000;
+    const maxTiles = Math.ceil(ago * PLAYER_SPEED) + 2;
+    playerInfo = {
+      status: "hidden",
+      lastSeen: { at: intel.at, heading: intel.heading ?? "unknown", secondsAgo: Math.round(ago * 10) / 10, by: intel.by },
+      couldHaveMovedTiles: maxTiles,
+      candidates: searchCandidates(intel, maxTiles, checkedAt, intel.t).map((c) => ({
+        junction: c.j.id,
+        at: c.j.at,
+        fromLastSeen: c.d,
+        alongLastHeading: c.along,
+        checkedSinceSighting: !c.unchecked,
+        you: mine.dist(c.j.at),
+        closestTeammate: closestMate(c.j.at),
+      })),
+    };
+  }
+
   const area = { NW: 0, NE: 0, SW: 0, SE: 0 };
-  let nearest = null;
-  let nearestD = Infinity;
   for (const k of game.sparks) {
     const [c, r] = k.split(",").map(Number);
     area[(r < ROWS / 2 ? "N" : "S") + (c < COLS / 2 ? "W" : "E")]++;
-    const d = Math.abs(c - p[0]) + Math.abs(r - p[1]);
-    if (d < nearestD) (nearestD = d), (nearest = [c, r]);
   }
   return {
-    t: Math.round((performance.now() - game.startedAt) / 100) / 10,
-    you: { name: h.name, at: me, target: h.target, stunned: h.stunUntil > performance.now() },
-    player: {
-      at: p,
-      heading: player.from[0] === player.to[0] && player.from[1] === player.to[1] ? "stopped" : player.dir,
-      in3Tiles: project(3),
-      in6Tiles: project(6),
-      pathDistanceToYou: path(me, p).length,
-      pulseCharges: game.pulses,
-    },
+    t: Math.round((now - game.startedAt) / 100) / 10,
+    you: { name: h.name, at: me, target: h.target, stunned: h.stunUntil > now, seesPlayer: h.sees },
+    player: playerInfo,
+    playerPulseCharges: game.pulses,
     teammates: hunters
       .filter((x) => x !== h)
-      .map((x) => ({ name: x.name, at: tileOf(x), target: x.target, intent: x.intent, stunned: x.stunUntil > performance.now() })),
+      .map((x) => ({ name: x.name, at: tileOf(x), target: x.target, intent: x.intent, stunned: x.stunUntil > now })),
     radio: radioLog.slice(-5).map((m) => `${m.name}: ${m.text}`),
-    sparks: { left: game.sparks.size, byArea: area, nearestToPlayer: nearest },
+    sparksLeft: { total: game.sparks.size, byArea: area },
   };
 }
 
@@ -370,6 +445,7 @@ function update(dt, now) {
   if (game.phase !== "play") return;
   movePlayer(dt);
   for (const h of hunters) moveHunter(h, dt, now);
+  updateIntel(now);
   const [px, py] = pos(player);
   for (const h of hunters) {
     if (h.stunUntil > now) continue;
@@ -408,8 +484,11 @@ function buildWalls(pxPerUnit) {
       if (!isWall(c, r)) continue;
       if (isWall(c + 1, r)) g.moveTo(mid(c), mid(r)), g.lineTo(mid(c + 1), mid(r));
       if (isWall(c, r + 1)) g.moveTo(mid(c), mid(r)), g.lineTo(mid(c), mid(r + 1));
-      if (!isWall(c + 1, r) && !isWall(c - 1, r) && !isWall(c, r + 1) && !isWall(c, r - 1))
-        g.moveTo(mid(c) - 6, mid(r)), g.lineTo(mid(c) + 6, mid(r));
+      // A wall that ends in a corridor must still visibly fill its tile, or the corridor looks open.
+      const n = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dc, dr]) => isWall(c + dc, r + dr));
+      const stub = TILE * 0.42;
+      if (n.length === 0) g.moveTo(mid(c) - stub, mid(r)), g.lineTo(mid(c) + stub, mid(r));
+      if (n.length === 1) g.moveTo(mid(c), mid(r)), g.lineTo(mid(c) - n[0][0] * stub, mid(r) - n[0][1] * stub);
     }
   g.stroke();
   return c;
@@ -460,6 +539,44 @@ function draw(now) {
     ctx.setLineDash([]);
   }
 
+  // fog of war: where the team last saw you, and live sight lines
+  if (game.phase === "play") {
+    if (!intel.visible) {
+      const age = (now - intel.t) / 1000;
+      const [qx, qy] = intel.at.map((v) => v * TILE + TILE / 2);
+      ctx.globalAlpha = Math.max(0.25, 1 - age / 12);
+      ctx.strokeStyle = "#ff3b5c";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.arc(qx, qy, 11 + Math.sin(now / 200) * 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#ff3b5c";
+      ctx.font = "bold 13px 'JetBrains Mono', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("?", qx, qy + 5);
+      ctx.textAlign = "left";
+      ctx.globalAlpha = 1;
+    }
+    const [sx, sy] = pos(player).map((v) => v * TILE + TILE / 2);
+    for (const h of hunters) {
+      if (!h.sees) continue;
+      const [hx, hy] = pos(h).map((v) => v * TILE + TILE / 2);
+      ctx.strokeStyle = h.color;
+      ctx.globalAlpha = 0.55;
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = h.color;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(sx, sy);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+  }
+
   // player
   const [px, py] = pos(player).map((v) => v * TILE + TILE / 2);
   const flicker = game.phase === "caught" && Math.floor(now / 100) % 2;
@@ -488,6 +605,16 @@ function draw(now) {
     circle(hx + ex * 3, hy + ey * 3, 3.6);
     ctx.fillStyle = "#fff";
     circle(hx + ex * 4, hy + ey * 4, 1.4);
+    if (h.alertUntil > now) {
+      ctx.fillStyle = "#fff";
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = h.color;
+      ctx.font = "bold 16px 'JetBrains Mono', monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("!", hx, hy - 16);
+      ctx.textAlign = "left";
+      ctx.shadowBlur = 0;
+    }
     if (h.thinking && game.phase === "play") {
       ctx.strokeStyle = h.color;
       ctx.lineWidth = 1.5;
@@ -535,11 +662,23 @@ function draw(now) {
 
   // overlays
   ctx.shadowBlur = 0;
-  if (game.phase === "title") banner("GLOWMAZE", "PRESS ENTER", "#ffe9a8");
+  if (game.phase === "title") banner("GLOWMAZE", "ENTER TO PLAY · H FOR HOW TO PLAY", "#ffe9a8");
   else if (game.phase === "over") banner("GAME OVER", `SCORE ${game.score} · ENTER TO RETRY`, "#ff3b5c");
   else if (game.phase === "caught") banner("CAUGHT", `by ${game.caughtBy?.name ?? "the hunters"}`, game.caughtBy?.color ?? "#ff3b5c");
   else if (game.phase === "clear") banner("BOARD CLEAR", `LEVEL ${game.level + 1} · HUNTERS GET FASTER`, "#4dffb0");
   else if (game.paused) banner("PAUSED", "P TO RESUME", "#7c84a3");
+  if (game.phase === "play") {
+    const label = intel.visible
+      ? `SPOTTED · ${intel.by.join(", ")}`
+      : `HIDDEN ${((now - intel.t) / 1000).toFixed(1)}s`;
+    ctx.font = "10px 'Press Start 2P', monospace";
+    const w = ctx.measureText(label).width + 20;
+    ctx.fillStyle = intel.visible ? "rgba(60,8,18,.85)" : "rgba(6,30,22,.85)";
+    roundRect(TILE * 0.5, 6, w, 20, 5);
+    ctx.fill();
+    ctx.fillStyle = intel.visible ? "#ff3b5c" : "#4dffb0";
+    ctx.fillText(label, TILE * 0.5 + 10, 20);
+  }
   if (game.lag && game.phase === "play") {
     ctx.font = "10px 'Press Start 2P', monospace";
     ctx.fillStyle = Math.floor(now / 500) % 2 ? "#ff3b5c" : "#ff3b5c88";
@@ -636,10 +775,23 @@ setInterval(() => {
   }
 }, 250);
 
+// ---------- onboarding ----------
+function showGuide() {
+  const resumeTo = game.phase === "play" ? "play" : null;
+  game.paused = true;
+  game.phase = "guide";
+  openGuide(() => {
+    game.paused = false;
+    if (resumeTo) game.phase = resumeTo;
+    else newGame();
+  });
+}
+
 // ---------- go ----------
 resize();
 resetBoard();
 renderRadio();
 hunters.forEach(brain);
 if (params.has("autostart")) newGame();
+else showGuide();
 requestAnimationFrame(frame);

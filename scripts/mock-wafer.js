@@ -19,15 +19,17 @@ http
     const body = JSON.parse(raw);
     const who = body.messages[0].content.match(/You control (\w+)\.$/m)?.[1] ?? "Rook";
     const s = JSON.parse(body.messages[1].content);
-    const pick = {
-      Rook: s.player.in3Tiles,
-      Vex: s.player.in6Tiles,
-      Moth: s.sparks.nearestToPlayer ?? s.player.at,
-      Grim: s.player.at,
-      Pip: [36 - s.player.at[0], s.player.at[1]],
-    }[who] ?? s.player.at;
+    const order = ["Rook", "Vex", "Moth", "Grim", "Pip"].indexOf(who);
+    let pick;
+    if (s.player.status === "visible") {
+      const esc = s.player.escapes.filter((e) => e.youArriveFirst);
+      pick = who === "Rook" ? s.player.in3Tiles : (esc[order % Math.max(1, esc.length)] ?? s.player.escapes[0])?.at ?? s.player.at;
+    } else {
+      const c = s.player.candidates;
+      pick = c.length ? c[order % c.length].at : s.player.lastSeen.at;
+    }
     const decision = {
-      intent: { Rook: "press the player", Vex: "cut off ahead", Moth: "guard the sparks", Grim: "herd from behind", Pip: "cover the mirror lane" }[who],
+      intent: s.player.status === "visible" ? "mock: claim an escape" : "mock: search a candidate",
       col: pick[0],
       row: pick[1],
       radio: Math.random() < 0.12 ? `${who} here, moving to ${pick[0]},${pick[1]}` : "",

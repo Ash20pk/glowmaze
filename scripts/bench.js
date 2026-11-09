@@ -8,6 +8,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { SYSTEM, SCHEMA } from "../prompt.js";
 import { isFloor } from "../public/shared.js";
+import { flood, nextJunctions } from "../public/tactics.js";
 
 if (existsSync(".env"))
   for (const line of readFileSync(".env", "utf8").split("\n")) {
@@ -26,18 +27,38 @@ let models = args;
 if (!models.length)
   models = (await (await fetch(`${BASE}/models`, { headers: { Authorization: `Bearer ${KEY}` } })).json()).data.map((m) => m.id);
 
+// A realistic mid-game state, built with the same tactics code the game uses.
+const PLAYER = { at: [9, 17], heading: "right" };
+const TEAM = { Vex: [20, 11], Rook: [5, 17], Moth: [24, 19], Grim: [9, 11], Pip: [31, 5] };
+const fl = Object.fromEntries(Object.entries(TEAM).map(([n, t]) => [n, flood(t)]));
+const closest = (t, except) =>
+  Object.keys(TEAM).filter((n) => n !== except).map((n) => ({ name: n, dist: fl[n].dist(t) })).sort((a, b) => a.dist - b.dist)[0];
 const STATE = {
   t: 23.4,
-  you: { name: "Vex", at: [20, 11], target: [24, 13], stunned: false },
-  player: { at: [9, 17], heading: "right", in3Tiles: [11, 17], in6Tiles: [11, 15], pathDistanceToYou: 17, pulseCharges: 1 },
+  you: { name: "Vex", at: TEAM.Vex, target: [24, 13], stunned: false, seesPlayer: false },
+  player: {
+    status: "visible",
+    seenBy: ["Rook"],
+    at: PLAYER.at,
+    heading: PLAYER.heading,
+    in3Tiles: [11, 17],
+    in6Tiles: [11, 15],
+    distanceToYou: fl.Vex.dist(PLAYER.at),
+    escapes: nextJunctions(PLAYER.at).map((e) => ({
+      junction: e.junction.id, at: e.junction.at, playerDist: e.dist, alongHeading: e.firstDir === PLAYER.heading,
+      you: fl.Vex.dist(e.junction.at), youArriveFirst: fl.Vex.dist(e.junction.at) / 6 < e.dist / 6.4,
+      closestTeammate: closest(e.junction.at, "Vex"),
+    })),
+  },
+  playerPulseCharges: 1,
   teammates: [
-    { name: "Rook", at: [5, 17], target: [8, 17], intent: "chase from behind", stunned: false },
-    { name: "Moth", at: [24, 19], target: [22, 19], intent: "guard south-east sparks", stunned: false },
-    { name: "Grim", at: [9, 11], target: [9, 13], intent: "block the north exit", stunned: false },
-    { name: "Pip", at: [31, 5], target: [25, 7], intent: "drift toward center", stunned: false },
+    { name: "Rook", at: TEAM.Rook, target: [8, 17], intent: "chase from behind", stunned: false },
+    { name: "Moth", at: TEAM.Moth, target: [22, 19], intent: "guard south-east sparks", stunned: false },
+    { name: "Grim", at: TEAM.Grim, target: [9, 13], intent: "block the north exit", stunned: false },
+    { name: "Pip", at: TEAM.Pip, target: [25, 7], intent: "drift toward center", stunned: false },
   ],
-  radio: ["Rook: he's running east on row 17", "Grim: I've got the north side"],
-  sparks: { left: 380, byArea: { NW: 92, NE: 99, SW: 91, SE: 98 }, nearestToPlayer: [10, 17] },
+  radio: ["Rook: spotted him running east on row 17", "Grim: I've got the north side"],
+  sparksLeft: { total: 380, byArea: { NW: 92, NE: 99, SW: 91, SE: 98 } },
 };
 
 async function once(model, attempt = 0) {

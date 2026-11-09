@@ -12,8 +12,10 @@ import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nearestFloor } from "./public/shared.js";
+import { nearestFloor, HUNTERS } from "./public/shared.js";
 import { SYSTEM, SCHEMA } from "./prompt.js";
+
+const NAMES = Object.fromEntries(HUNTERS.map((h) => [h.id, h.name]));
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 loadDotEnv(join(ROOT, ".env"));
@@ -156,7 +158,10 @@ async function decide(req, res) {
     intent: String(decision.intent || "").slice(0, 60),
     col,
     row,
-    radio: String(decision.radio || "").slice(0, 80),
+    // models sometimes sign their own messages ("Moth: ...") even when told not to; the UI already shows who spoke
+    radio: String(decision.radio || "")
+      .replace(new RegExp(`^\\s*${NAMES[hunterId]}\\s*(here)?\\s*[:,-]\\s*`, "i"), "")
+      .slice(0, 80),
   };
   record.ok = true;
   record.decision = clean;
