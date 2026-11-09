@@ -1,0 +1,71 @@
+:root {
+  --bg: #05060a;
+  --panel: #0c0e16;
+  --line: #1b2033;
+  --text: #e6e9f5;
+  --muted: #7c84a3;
+  --neon: #2f6bff;
+  --spark: #ffe9a8;
+  --hot: #ff3b5c;
+  --ok: #4dffb0;
+  --pixel: "Press Start 2P", ui-monospace, monospace;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body { font: 14px/1.45 var(--mono); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 40px; }
+
+.top { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.top h1 { font: 26px var(--pixel); margin: 0; color: #fff; text-shadow: 0 0 10px var(--neon), 0 0 24px var(--neon); letter-spacing: 2px; }
+.top h1 span { color: var(--spark); text-shadow: 0 0 10px #ffb02e, 0 0 24px #ff7a00; }
+.sub { margin: 0; color: var(--muted); font-size: 12px; }
+.sub b { color: var(--ok); font-weight: 600; }
+
+.layout { display: grid; grid-template-columns: auto minmax(300px, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+.cabinet { min-width: 0; }
+.score { display: flex; justify-content: space-between; gap: 10px; font: 10px var(--pixel); color: var(--muted); padding: 0 4px 10px; flex-wrap: wrap; }
+.score b { color: #fff; font-weight: 400; margin-left: 6px; }
+#lives { color: var(--hot); }
+#pulse { color: #c58bff; }
+
+.screen { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 0 40px rgba(47,107,255,.15), inset 0 0 60px #000; background: #000; max-width: 100%; }
+.screen canvas { display: block; max-width: 100%; height: auto; }
+.crt { pointer-events: none; position: absolute; inset: 0;
+  background: repeating-linear-gradient(to bottom, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
+              radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,.55) 100%); }
+.keys { color: var(--muted); font-size: 11px; margin: 10px 4px 0; }
+
+.hud { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; min-width: 0; }
+.hud h2 { font: 9px var(--pixel); color: var(--muted); margin: 18px 0 10px; letter-spacing: 1px; }
+
+.lag { width: 100%; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px; text-align: left;
+  background: #07130f; border: 1px solid #1d4d3a; border-radius: 10px; padding: 12px 14px; cursor: pointer; color: var(--text); font: inherit; }
+.lag-label { font: 9px var(--pixel); color: var(--muted); }
+.lag-state { grid-row: span 2; font: 16px var(--pixel); color: var(--ok); text-shadow: 0 0 10px var(--ok); }
+.lag-hint { font-size: 11px; color: var(--muted); }
+.lag[aria-pressed="true"] { background: #1a070b; border-color: #6b1a2a; }
+.lag[aria-pressed="true"] .lag-state { color: var(--hot); text-shadow: 0 0 10px var(--hot); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .45; } }
+
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.stat { background: #080a11; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.stat span { display: block; font-size: 10px; color: var(--muted); }
+.stat b { font-size: 17px; font-weight: 600; }
+.stat:first-child b { color: var(--ok); }
+.lagging .stat:first-child b { color: var(--hot); }
+
+.hunters, .radio { list-style: none; margin: 0; padding: 0; }
+.hunters li { display: grid; grid-template-columns: 12px 52px 1fr auto; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.hunters li:last-child { border-bottom: 0; }
+.hunters i { width: 10px; height: 10px; border-radius: 2px; transform: rotate(45deg); }
+.hunters .intent { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.hunters .ms { font-variant-numeric: tabular-nums; }
+
+.radio { max-height: 210px; overflow: hidden; font-size: 12px; }
+.radio li { padding: 3px 0; animation: in .25s ease-out; }
+.radio b { font-weight: 600; }
+@keyframes in { from { opacity: 0; transform: translateY(-4px); } }
+.empty { color: var(--muted); }

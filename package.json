@@ -1,0 +1,14 @@
+{
+  "name": "glowmaze",
+  "version": "0.1.0",
+  "description": "A neon maze chase where five hunters are driven live by an LLM on Wafer.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "mock": "node scripts/mock-wafer.js",
+    "dev:mock": "WAFER_BASE_URL=http://localhost:4999/v1 WAFER_API_KEY=mock node server.js",
+    "bench": "node scripts/bench.js"
+  }
+}
