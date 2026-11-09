@@ -18,6 +18,8 @@ import { openGuide } from "./onboarding.js";
 
 const params = new URLSearchParams(location.search);
 const AUTOPILOT = params.has("autopilot"); // a simple bot plays — handy for testing and attract mode
+// ?bot=casual: reacts to hunters later and never pulses, closer to how a person plays (used for the demo video)
+const BOT_CASUAL = params.get("bot") === "casual";
 const LAG_MS = 2000;
 const MIN_DECISION_GAP_MS = 150; // the chaser re-decides almost back-to-back
 const COVER_DECISION_GAP_MS = 600; // covers mostly follow the chaser's orders, so they think less often
@@ -724,10 +726,10 @@ function say(h, text) {
 // ---------- autopilot (testing / attract mode) ----------
 function autopilot() {
   const here = player.from;
-  const threats = hunters.filter((h) => path(here, tileOf(h)).length <= 4 && h.stunUntil < performance.now());
+  const threats = hunters.filter((h) => path(here, tileOf(h)).length <= (BOT_CASUAL ? 2 : 4) && h.stunUntil < performance.now());
   const options = Object.keys(DIRS).filter((d) => open(here, d));
   if (threats.length) {
-    if (game.pulses > 0 && threats.length >= 2) firePulse();
+    if (!BOT_CASUAL && game.pulses > 0 && threats.length >= 2) firePulse();
     const score = (d) => Math.min(...threats.map((h) => path(add(here, d), tileOf(h)).length));
     return options.sort((a, b) => score(b) - score(a))[0];
   }
