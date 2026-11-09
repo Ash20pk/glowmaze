@@ -10,6 +10,14 @@ const ROLES = {
   pip: "The trickster. Fills whatever gap is left.",
 };
 
+const POWER_BLURB = {
+  wall: "drops a wall that seals a corridor for 6s",
+  blink: "teleports ahead of you to cut you off",
+  flare: "lights up a wide area; inside it, you can't hide",
+  sludge: "coats a corridor in goo that halves your speed",
+  snare: "hides a trap that freezes and reveals you",
+};
+
 const hex = (color, size = 26) =>
   `<span class="g-hex" style="--c:${color};width:${size}px;height:${size}px"><i></i></span>`;
 
@@ -24,11 +32,11 @@ const STEPS = [
   },
   {
     kicker: "2 / 5 · the hunters",
-    title: "FIVE HUNTERS, ONE TEAM",
+    title: "FIVE HUNTERS, FIVE POWERS",
     art: `<ul class="g-hunters">${HUNTERS.map(
-      (h) => `<li>${hex(h.color)}<b style="color:${h.color}">${h.name}</b><span>${ROLES[h.id]}</span></li>`
+      (h) => `<li>${hex(h.color)}<b style="color:${h.color}">${h.name}</b><span>${ROLES[h.id]}</span><span class="g-pw" style="--c:${h.color}"><b>${h.power.name}</b>: ${POWER_BLURB[h.power.id]}</span></li>`
     ).join("")}</ul>`,
-    body: `<p>Nothing here is scripted. Every move each hunter makes is decided <b class="ok">live by an AI model on Wafer</b>, several times a second. They plan, predict where you're going, and talk to each other on a team radio.</p>`,
+    body: `<p>Nothing here is scripted. Every move each hunter makes is decided <b class="ok">live by an AI model on Wafer</b>, several times a second. The AI decides where each one goes, when to use its power, and how to combine powers with the team. A power <b>flashes for half a second</b> before it lands, so watch for the warning.</p>`,
   },
   {
     kicker: "3 / 5 · stealth",
@@ -47,7 +55,7 @@ const STEPS = [
     title: "CONTROLS",
     art: `<ul class="g-keys">
       <li><span><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Move</span></li>
-      <li><span><kbd class="wide">SPACE</kbd></span><span>Pulse: stuns hunters within 5 tiles for 3 seconds. Grab the <b class="pulse">purple orbs</b> for more</span></li>
+      <li><span><kbd class="wide">SPACE</kbd></span><span>Pulse: stuns hunters within 5 tiles for 3 seconds and <b>breaks their walls, sludge and snares</b> nearby. Grab the <b class="pulse">purple orbs</b> for more</span></li>
       <li><span><kbd>P</kbd></span><span>Pause</span></li>
       <li><span><kbd>F</kbd></span><span>Fullscreen</span></li>
       <li><span><kbd>T</kbd></span><span>Show or hide the hunters' plans</span></li>

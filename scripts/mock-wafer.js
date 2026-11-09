@@ -32,7 +32,11 @@ http
       intent: s.player.status === "visible" ? "mock: claim an escape" : "mock: search a candidate",
       col: pick[0],
       row: pick[1],
-      radio: Math.random() < 0.12 ? `${who} here, moving to ${pick[0]},${pick[1]}` : "",
+      radio: Math.random() < 0.12 ? `moving to ${pick[0]},${pick[1]}` : "",
+      // use the power now and then, aimed at the same place (the game rejects illegal uses)
+      usePower: !!s.yourPower?.ready && Math.random() < 0.3,
+      powerCol: pick[0],
+      powerRow: pick[1],
     };
     const text = JSON.stringify(decision);
     const total = LATENCY[0] + Math.random() * (LATENCY[1] - LATENCY[0]);

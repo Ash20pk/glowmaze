@@ -33,16 +33,28 @@ const SHARED = [
   "Search: go to a likely candidate no teammate is heading for, sweeping along the player's last heading.",
   "Spread out; never send two hunters to the same place.",
   "",
+  "Each hunter has one special power, described at the end. state.yourPower says whether yours is ready. To use it,",
+  "set usePower true and give its target tile in powerCol/powerRow. Only use it when it is ready, and when it",
+  "clearly helps: an illegal use (wrong tile, too close to the player, still cooling down) is rejected.",
+  "Powers win games when combined: announce yours on the radio and set up teammates (a wall behind a sludge, a",
+  "flare before a blink). state.effects lists the team's active walls, sludge, flares and snares.",
+  "",
   "Reply with JSON only:",
   '- "intent": your plan in 6 words or fewer, naming the junction if you target one',
   '- "col", "row": the target floor tile',
   '- "radio": a message to your team in 10 words or fewer, or "" to stay quiet. Speak when you spot or lose the',
   "  player, claim an escape, or split up a search (about one turn in four). Address teammates by name; don't",
   "  start with your own name.",
+  '- "usePower": true to use your power this turn, otherwise false',
+  '- "powerCol", "powerRow": the power\'s target tile (any values when usePower is false)',
 ].join("\n");
 
 export const SYSTEM = Object.fromEntries(
-  HUNTERS.map((h) => [h.id, `${SHARED}\n\nYou control ${h.name}.\n${h.persona}`])
+  HUNTERS.map((h) => [
+    h.id,
+    `${SHARED}\n\nYou control ${h.name}.\n${h.persona}\n` +
+      `Your power is ${h.power.name}: ${h.power.what} Cooldown ${h.power.cooldown}s. ${h.power.advice}`,
+  ])
 );
 
 export const SCHEMA = {
@@ -57,8 +69,11 @@ export const SCHEMA = {
         col: { type: "integer" },
         row: { type: "integer" },
         radio: { type: "string" },
+        usePower: { type: "boolean" },
+        powerCol: { type: "integer" },
+        powerRow: { type: "integer" },
       },
-      required: ["intent", "col", "row", "radio"],
+      required: ["intent", "col", "row", "radio", "usePower", "powerCol", "powerRow"],
       additionalProperties: false,
     },
   },

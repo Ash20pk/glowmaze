@@ -162,6 +162,10 @@ async function decide(req, res) {
     radio: String(decision.radio || "")
       .replace(new RegExp(`^\\s*${NAMES[hunterId]}\\s*(here)?\\s*[:,-]\\s*`, "i"), "")
       .slice(0, 80),
+    usePower: decision.usePower === true,
+    ...(decision.usePower === true
+      ? (([pc, pr]) => ({ powerCol: pc, powerRow: pr }))(nearestFloor(Math.round(decision.powerCol), Math.round(decision.powerRow)))
+      : {}),
   };
   record.ok = true;
   record.decision = clean;

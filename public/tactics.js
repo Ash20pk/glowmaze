@@ -29,7 +29,7 @@ export function flood(from) {
       q.push(n);
     }
   }
-  return { dist: (t) => dist[idx(...t)], first: (t) => first[idx(...t)] };
+  return { dist: (t) => dist[idx(...t)], first: (t) => first[idx(...t)], reached: q.length };
 }
 
 /** Straight, unbroken corridor between a and b (same row or column), or adjacent (incl. diagonal). */

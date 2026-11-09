@@ -11,7 +11,7 @@
 // switch (L) adds 2s to every decision so you can feel the difference.
 
 import {
-  MAZE, COLS, ROWS, HUNTERS, DIRS, PLAYER_SPAWN, PULSE_TILES, isFloor, path, neighbors,
+  MAZE, COLS, ROWS, HUNTERS, DIRS, PLAYER_SPAWN, PULSE_TILES, FLOOR_TILES, isFloor, isOpen, tempWalls, path, neighbors,
 } from "./shared.js";
 import { canSee, flood, nextJunctions, searchCandidates, junctionsVisibleFrom } from "./tactics.js";
 import { openGuide } from "./onboarding.js";
@@ -67,6 +67,9 @@ const game = {
   lag: false,
   showPlans: true,
   pulseFx: null,
+  revealUntil: 0,
+  revealBy: "",
+  powerStats: { used: 0, rejected: 0 },
 };
 
 const key = (c, r) => `${c},${r}`;
@@ -93,20 +96,48 @@ const decisions = []; // rolling metrics
 const intel = { at: [...PLAYER_SPAWN], heading: null, t: 0, by: [], visible: false };
 const checkedAt = new Map(); // junction id -> last time any hunter had eyes on it
 
+// Powers. The model asks for one in its decision; code checks it is legal, telegraphs it for
+// POWER_WINDUP_MS so the player can react, then applies it.
+const POWER_WINDUP_MS = 500;
+const SNARE_FREEZE_MS = 1500;
+const fx = {
+  walls: new Map(), // tile index -> { until, owner }
+  sludge: [], // { tiles: Set<index>, at, until, owner }
+  snares: new Map(), // tile index -> { until, owner }
+  flares: [], // { at, until, owner, radius }
+  pending: [], // { owner, power, at, fireAt, epoch }
+  bursts: [], // { at, color, t0, label }
+};
+const tIdx = ([c, r]) => r * COLS + c;
+const fromIdx = (i) => [i % COLS, Math.floor(i / COLS)];
+const SHORT = { wall: "WALL", blink: "BLINK", flare: "FLARE", sludge: "SLUDGE", snare: "SNARE" };
+
+function clearEffects() {
+  fx.walls.clear();
+  tempWalls.clear();
+  fx.sludge.length = 0;
+  fx.snares.clear();
+  fx.flares.length = 0;
+  fx.pending.length = 0;
+  fx.bursts.length = 0;
+}
+
 function resetBoard() {
   game.sparks.clear();
   game.pulseTiles = new Set(PULSE_TILES.map((t) => key(...t)));
   const noSpark = new Set([key(...PLAYER_SPAWN), ...HUNTERS.map((h) => key(...h.spawn)), ...game.pulseTiles]);
   for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c < COLS; c++) if (isFloor(c, r) && !noSpark.has(key(c, r))) game.sparks.add(key(c, r));
+    for (let c = 0; c < COLS; c++) if (isOpen(c, r) && !noSpark.has(key(c, r))) game.sparks.add(key(c, r));
 }
 
 function resetPositions() {
   game.epoch++;
   Object.assign(intel, { at: [...PLAYER_SPAWN], heading: null, t: performance.now(), by: ["respawn"], visible: false });
   checkedAt.clear();
-  Object.assign(player, { from: [...PLAYER_SPAWN], to: [...PLAYER_SPAWN], t: 0, dir: null, want: null });
-  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null, sees: false, alertUntil: 0 });
+  clearEffects();
+  game.revealUntil = 0;
+  Object.assign(player, { from: [...PLAYER_SPAWN], to: [...PLAYER_SPAWN], t: 0, dir: null, want: null, frozenUntil: 0 });
+  for (const h of hunters) Object.assign(h, { from: [...h.spawn], to: [...h.spawn], t: 0, prev: null, target: null, stunUntil: 0, bubble: null, sees: false, alertUntil: 0, powerReadyAt: performance.now() + 4000, powerNote: "", powerNoteUntil: 0 });
 }
 
 function newGame() {
@@ -156,6 +187,11 @@ function firePulse() {
     const [hx, hy] = pos(h);
     if (Math.hypot(hx - px, hy - py) <= PULSE_RADIUS) h.stunUntil = performance.now() + STUN_MS;
   }
+  // the pulse also breaks the hunters' map tricks around you
+  const near = (i) => Math.hypot(fromIdx(i)[0] - px, fromIdx(i)[1] - py) <= PULSE_RADIUS;
+  for (const i of [...fx.walls.keys()]) if (near(i)) fx.walls.delete(i), tempWalls.delete(i);
+  for (const s of fx.sludge) for (const i of [...s.tiles]) if (near(i)) s.tiles.delete(i);
+  for (const i of [...fx.snares.keys()]) if (near(i)) fx.snares.delete(i);
 }
 
 // ---------- movement ----------
@@ -166,7 +202,10 @@ const open = (t, d) => d && isFloor(...add(t, d));
 const OPP = { up: "down", down: "up", left: "right", right: "left" };
 const dirBetween = (a, b) => Object.keys(DIRS).find((d) => a[0] + DIRS[d][0] === b[0] && a[1] + DIRS[d][1] === b[1]);
 
+const inSludge = (t) => fx.sludge.some((s) => s.tiles.has(tIdx(t)));
+
 function movePlayer(dt) {
+  if (player.frozenUntil > performance.now()) return; // caught in Pip's snare
   const moving = player.from[0] !== player.to[0] || player.from[1] !== player.to[1];
   if (moving && player.want === OPP[player.dir]) {
     [player.from, player.to] = [player.to, player.from];
@@ -180,7 +219,7 @@ function movePlayer(dt) {
       player.to = add(player.from, player.dir);
     } else return;
   }
-  player.t += PLAYER_SPEED * dt;
+  player.t += PLAYER_SPEED * (inSludge(tileOf(player)) ? 0.5 : 1) * dt;
   while (player.t >= 1) {
     player.t -= 1;
     player.from = player.to;
@@ -197,6 +236,15 @@ function movePlayer(dt) {
 
 function arrive(tile) {
   const k = key(...tile);
+  const snare = fx.snares.get(tIdx(tile));
+  if (snare) {
+    const now = performance.now();
+    fx.snares.delete(tIdx(tile));
+    player.frozenUntil = now + SNARE_FREEZE_MS;
+    game.revealUntil = now + SNARE_FREEZE_MS;
+    game.revealBy = `${snare.owner.name}'s snare`;
+    fx.bursts.push({ at: tile, color: snare.owner.color, t0: now, label: "SNARED!" });
+  }
   if (game.sparks.delete(k)) game.score += 10;
   if (game.pulseTiles.delete(k)) {
     game.pulses = Math.min(3, game.pulses + 1);
@@ -271,6 +319,7 @@ async function brain(h) {
       h.lastReact = Math.round(react);
       h.lastWafer = body.timing?.totalMs;
       if (d.radio) say(h, d.radio);
+      if (d.usePower) requestPower(h, d, performance.now());
     } else if (!ok) {
       h.intent = `⚠ ${body.error || "error"}`;
       await sleep((body.retryAfter || 1) * 1000);
@@ -292,6 +341,10 @@ function updateIntel(now) {
     h.sees = sees;
     if (sees) seers.push(h.name);
   }
+  const [px, py] = pos(player);
+  const flare = fx.flares.find((f) => Math.hypot(f.at[0] - px, f.at[1] - py) <= f.radius);
+  if (flare) seers.push(`${flare.owner.name}'s flare`);
+  if (game.revealUntil > now) seers.push(game.revealBy);
   const moving = player.from[0] !== player.to[0] || player.from[1] !== player.to[1];
   if (seers.length) Object.assign(intel, { at: pt, heading: moving ? player.dir : null, t: now, by: seers, visible: true });
   else intel.visible = false;
@@ -364,14 +417,130 @@ function snapshot(h) {
   return {
     t: Math.round((now - game.startedAt) / 100) / 10,
     you: { name: h.name, at: me, target: h.target, stunned: h.stunUntil > now, seesPlayer: h.sees },
+    yourPower: {
+      name: h.power.name,
+      ready: now >= h.powerReadyAt && h.stunUntil <= now,
+      readyInSeconds: Math.max(0, Math.ceil((h.powerReadyAt - now) / 1000)),
+      ...(h.powerNoteUntil > now ? { lastAttempt: h.powerNote } : {}),
+    },
+    effects: effectsSummary(now),
     player: playerInfo,
     playerPulseCharges: game.pulses,
     teammates: hunters
       .filter((x) => x !== h)
-      .map((x) => ({ name: x.name, at: tileOf(x), target: x.target, intent: x.intent, stunned: x.stunUntil > now })),
+      .map((x) => ({
+        name: x.name, at: tileOf(x), target: x.target, intent: x.intent, stunned: x.stunUntil > now,
+        power: x.power.name, powerReady: now >= x.powerReadyAt,
+      })),
     radio: radioLog.slice(-5).map((m) => `${m.name}: ${m.text}`),
     sparksLeft: { total: game.sparks.size, byArea: area },
   };
+}
+
+// ---------- powers ----------
+function effectsSummary(now) {
+  const left = (u) => Math.max(0, Math.round((u - now) / 100) / 10);
+  return {
+    walls: [...fx.walls].map(([i, w]) => ({ at: fromIdx(i), by: w.owner.name, secondsLeft: left(w.until) })),
+    sludge: fx.sludge.filter((s) => s.tiles.size).map((s) => ({ at: s.at, tiles: s.tiles.size, secondsLeft: left(s.until) })),
+    flares: fx.flares.map((f) => ({ at: f.at, radius: f.radius, secondsLeft: left(f.until) })),
+    snares: [...fx.snares].map(([i, s]) => ({ at: fromIdx(i), secondsLeft: left(s.until) })),
+    incoming: fx.pending.map((p) => ({ power: p.power.name, by: p.owner.name, at: p.at })),
+  };
+}
+
+const occupied = (t) =>
+  [player.from, player.to, ...hunters.flatMap((x) => [x.from, x.to])].some((o) => o[0] === t[0] && o[1] === t[1]);
+
+// Why this power use is illegal right now, or null if it's fine. Enforced in code, not trusted to the model.
+function invalidPower(h, id, at) {
+  if (!isOpen(...at)) return "not a floor tile";
+  const dPlayer = flood(tileOf(player)).dist(at);
+  if (id === "wall") {
+    if (!isFloor(...at)) return "already walled";
+    if (dPlayer >= 0 && dPlayer < 3) return "too close to the player";
+    if (occupied(at)) return "someone is standing there";
+    if (fx.walls.size >= 3) return "three walls already up";
+    tempWalls.add(tIdx(at));
+    const room = flood(tileOf(player)).reached;
+    tempWalls.delete(tIdx(at));
+    if (room < FLOOR_TILES.length * 0.5) return "would seal the player in";
+  }
+  if (id === "blink") {
+    if (!isFloor(...at)) return "blocked";
+    if (dPlayer >= 0 && dPlayer < 5) return "too close to the player";
+  }
+  if (id === "sludge" && dPlayer >= 0 && dPlayer < 2) return "too close to the player";
+  if (id === "snare") {
+    if (dPlayer >= 0 && dPlayer < 4) return "too close to the player";
+    if ([...fx.snares.values()].filter((s) => s.owner === h).length >= 2) return "two snares already set";
+  }
+  return null;
+}
+
+function requestPower(h, d, now) {
+  const at = [d.powerCol, d.powerRow];
+  const why =
+    now < h.powerReadyAt ? "still cooling down" : h.stunUntil > now ? "stunned" : invalidPower(h, h.power.id, at);
+  if (why) {
+    h.powerNote = `${SHORT[h.power.id]} rejected: ${why}`;
+    h.powerNoteUntil = now + 3000;
+    game.powerStats.rejected++;
+    return;
+  }
+  h.powerReadyAt = now + h.power.cooldown * 1000;
+  fx.pending.push({ owner: h, power: h.power, at, fireAt: now + POWER_WINDUP_MS, epoch: game.epoch });
+}
+
+function firePower(p, now) {
+  const h = p.owner;
+  const why = invalidPower(h, p.power.id, p.at); // the board changed during the wind-up
+  if (why) {
+    h.powerNote = `${SHORT[p.power.id]} fizzled: ${why}`;
+    h.powerNoteUntil = now + 3000;
+    game.powerStats.rejected++;
+    return;
+  }
+  game.powerStats.used++;
+  const until = now + (p.power.duration || 0) * 1000;
+  const label = p.power.name.toUpperCase() + "!";
+  if (p.power.id === "wall") {
+    fx.walls.set(tIdx(p.at), { until, owner: h });
+    tempWalls.add(tIdx(p.at));
+  } else if (p.power.id === "blink") {
+    fx.bursts.push({ at: tileOf(h), color: h.color, t0: now });
+    Object.assign(h, { from: [...p.at], to: [...p.at], t: 0, prev: null });
+  } else if (p.power.id === "flare") {
+    fx.flares.push({ at: p.at, until, owner: h, radius: p.power.radius });
+  } else if (p.power.id === "sludge") {
+    fx.sludge.push({ tiles: new Set(sludgeTiles(p.at).map(tIdx)), at: p.at, until, owner: h });
+  } else if (p.power.id === "snare") {
+    fx.snares.set(tIdx(p.at), { until, owner: h });
+  }
+  fx.bursts.push({ at: p.at, color: h.color, t0: now, label });
+}
+
+// Up to 5 tiles along whichever straight corridor through `at` is longer.
+function sludgeTiles(at) {
+  const run = (dc, dr) => {
+    const out = [];
+    for (let i = 1; i <= 2 && isOpen(at[0] + dc * i, at[1] + dr * i); i++) out.push([at[0] + dc * i, at[1] + dr * i]);
+    return out;
+  };
+  const h = [...run(-1, 0), ...run(1, 0)];
+  const v = [...run(0, -1), ...run(0, 1)];
+  return [at, ...(h.length >= v.length ? h : v)];
+}
+
+function tickEffects(now) {
+  for (const [i, w] of [...fx.walls]) if (w.until <= now) fx.walls.delete(i), tempWalls.delete(i);
+  for (const [i, s] of [...fx.snares]) if (s.until <= now) fx.snares.delete(i);
+  fx.sludge = fx.sludge.filter((s) => s.until > now && s.tiles.size);
+  fx.flares = fx.flares.filter((f) => f.until > now);
+  fx.bursts = fx.bursts.filter((b) => now - b.t0 < 1100);
+  const due = fx.pending.filter((p) => p.fireAt <= now);
+  fx.pending = fx.pending.filter((p) => p.fireAt > now);
+  for (const p of due) if (p.epoch === game.epoch) firePower(p, now);
 }
 
 // Where the player will be in n tiles if they keep going (taking forced turns at corners).
@@ -443,6 +612,7 @@ function update(dt, now) {
     game.phase = "play";
   }
   if (game.phase !== "play") return;
+  tickEffects(now);
   movePlayer(dt);
   for (const h of hunters) moveHunter(h, dt, now);
   updateIntel(now);
@@ -514,6 +684,8 @@ function draw(now) {
     const [c, r] = k.split(",").map(Number);
     circle(c * TILE + TILE / 2, r * TILE + TILE / 2, throb);
   }
+
+  drawEffects(now);
 
   // AI plans: a dashed line from each hunter to the tile it decided to go to
   if (game.showPlans && game.phase === "play") {
@@ -588,6 +760,16 @@ function draw(now) {
     ctx.fillStyle = "#ffd75e";
     circle(px, py, 5);
   }
+  if (player.frozenUntil > now) {
+    ctx.strokeStyle = "#bfefff";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 14;
+    ctx.shadowColor = "#7fdcff";
+    ctx.beginPath();
+    ctx.arc(px, py, 13, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
 
   // hunters
   for (const h of hunters) {
@@ -645,6 +827,8 @@ function draw(now) {
     ctx.fillText(text, bx + 7, by + 14);
   }
 
+  drawPowerCallouts(now);
+
   // pulse ring
   if (game.pulseFx) {
     const age = Math.max(0, (now - game.pulseFx.at) / 500);
@@ -686,6 +870,109 @@ function draw(now) {
   }
 }
 
+const cx = (v) => v * TILE + TILE / 2;
+
+function drawEffects(now) {
+  ctx.save();
+  // flares: a lit disc
+  for (const f of fx.flares) {
+    const life = Math.min(1, (f.until - now) / 1000);
+    const g = ctx.createRadialGradient(cx(f.at[0]), cx(f.at[1]), 0, cx(f.at[0]), cx(f.at[1]), f.radius * TILE);
+    g.addColorStop(0, `rgba(61,214,255,${0.32 * life})`);
+    g.addColorStop(1, "rgba(61,214,255,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx(f.at[0]), cx(f.at[1]), f.radius * TILE, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = `rgba(61,214,255,${0.5 * life})`;
+    ctx.setLineDash([4, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // sludge: bubbling goo on the floor
+  for (const s of fx.sludge) {
+    const fade = (s.until - now) < 1000 && Math.floor(now / 120) % 2 ? 0.12 : 0.3;
+    for (const i of s.tiles) {
+      const [c, r] = fromIdx(i);
+      ctx.fillStyle = `rgba(179,136,255,${fade})`;
+      ctx.fillRect(c * TILE + 2, r * TILE + 2, TILE - 4, TILE - 4);
+      ctx.fillStyle = "rgba(220,200,255,.55)";
+      const b = (now / 300 + c * 7 + r * 3) % 1;
+      circle(c * TILE + 8 + ((c * 13) % 14), r * TILE + TILE - 6 - b * 16, 1.6 + b);
+    }
+  }
+  // snares: barely-visible glints so a careful player can spot them
+  for (const [i, sn] of fx.snares) {
+    const [c, r] = fromIdx(i);
+    ctx.globalAlpha = 0.25 + 0.15 * Math.sin(now / 250 + i);
+    ctx.strokeStyle = sn.owner.color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx(c), cx(r) - 6), ctx.lineTo(cx(c) + 6, cx(r)), ctx.lineTo(cx(c), cx(r) + 6), ctx.lineTo(cx(c) - 6, cx(r)), ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  // walls: a solid glowing block in the owner's colour, flickering in its last second
+  for (const [i, w] of fx.walls) {
+    if (w.until - now < 1000 && Math.floor(now / 100) % 2) continue;
+    const [c, r] = fromIdx(i);
+    ctx.fillStyle = w.owner.color;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = w.owner.color;
+    ctx.fillRect(c * TILE + 4, r * TILE + 4, TILE - 8, TILE - 8);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(255,255,255,.7)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(c * TILE + 4, r * TILE + 4, TILE - 8, TILE - 8);
+  }
+  ctx.restore();
+}
+
+// The wind-up warning before a power lands, and a burst + label when it does.
+function drawPowerCallouts(now) {
+  ctx.save();
+  ctx.textAlign = "center";
+  for (const p of fx.pending) {
+    const on = Math.floor(now / 90) % 2;
+    ctx.strokeStyle = p.owner.color;
+    ctx.globalAlpha = on ? 1 : 0.4;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    if (p.power.id === "flare") {
+      ctx.beginPath();
+      ctx.arc(cx(p.at[0]), cx(p.at[1]), p.power.radius * TILE, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (p.power.id === "sludge") {
+      for (const t of sludgeTiles(p.at)) ctx.strokeRect(t[0] * TILE + 2, t[1] * TILE + 2, TILE - 4, TILE - 4);
+    } else ctx.strokeRect(p.at[0] * TILE + 1, p.at[1] * TILE + 1, TILE - 2, TILE - 2);
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.font = "8px 'Press Start 2P', monospace";
+    ctx.fillStyle = p.owner.color;
+    ctx.fillText(SHORT[p.power.id], cx(p.at[0]), p.at[1] * TILE - 4);
+  }
+  for (const b of fx.bursts) {
+    const age = (now - b.t0) / 1000;
+    ctx.strokeStyle = b.color;
+    ctx.globalAlpha = Math.max(0, 1 - age / 0.6);
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(cx(b.at[0]), cx(b.at[1]), 6 + age * 50, 0, Math.PI * 2);
+    ctx.stroke();
+    if (b.label) {
+      ctx.globalAlpha = Math.max(0, 1 - age / 1.1);
+      ctx.font = "10px 'Press Start 2P', monospace";
+      ctx.fillStyle = b.color;
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = b.color;
+      ctx.fillText(b.label, cx(b.at[0]), b.at[1] * TILE - 8 - age * 18);
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
 function banner(title, sub, color) {
   ctx.fillStyle = "rgba(2,3,9,.72)";
   ctx.fillRect(0, ROWS * TILE * 0.38, COLS * TILE, 96);
@@ -725,7 +1012,7 @@ function roundRect(x, y, w, h, r) {
 const hunterRows = Object.fromEntries(
   hunters.map((h) => {
     const li = document.createElement("li");
-    li.innerHTML = `<i style="background:${h.color};box-shadow:0 0 8px ${h.color}"></i><b style="color:${h.color}">${h.name}</b><span class="intent"></span><span class="ms"></span>`;
+    li.innerHTML = `<i style="background:${h.color};box-shadow:0 0 8px ${h.color}"></i><b style="color:${h.color}">${h.name}</b><span class="intent"></span><span class="pw"></span><span class="ms"></span>`;
     $("hunters").append(li);
     return [h.id, li];
   })
@@ -770,7 +1057,13 @@ setInterval(() => {
 
   for (const h of hunters) {
     const li = hunterRows[h.id];
-    li.querySelector(".intent").textContent = h.intent;
+    const now = performance.now();
+    li.querySelector(".intent").textContent = h.powerNoteUntil > now ? h.powerNote : h.intent;
+    const left = Math.ceil((h.powerReadyAt - now) / 1000);
+    const pw = li.querySelector(".pw");
+    pw.textContent = left > 0 ? `${SHORT[h.power.id]} ${left}s` : `${SHORT[h.power.id]} ✓`;
+    pw.classList.toggle("ready", left <= 0);
+    pw.style.setProperty("--c", h.color);
     li.querySelector(".ms").textContent = ms(h.lastReact);
   }
 }, 250);
@@ -792,6 +1085,7 @@ resize();
 resetBoard();
 renderRadio();
 hunters.forEach(brain);
+if (AUTOPILOT) window.__glowmaze = { game, fx, hunters }; // test hook
 if (params.has("autostart")) newGame();
 else showGuide();
 requestAnimationFrame(frame);

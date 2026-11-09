@@ -1,6 +1,6 @@
 # Glowmaze
 
-A neon maze-chase arcade game where all five hunters are controlled live by an LLM running on [Wafer](https://wafer.ai). They can only see you down a straight corridor, so they have to **find** you: they share sightings on a team radio, split up to search where you could have gone, and claim escape routes to trap you.
+A neon maze-chase arcade game where all five hunters are controlled live by an LLM running on [Wafer](https://wafer.ai). They can only see you down a straight corridor, so they have to **find** you: they share sightings on a team radio, split up to search where you could have gone, and claim escape routes to trap you. Each hunter also has a power that bends the map, and the AI decides when and where to use it.
 
 https://github.com/user-attachments/assets/REPLACE-WITH-DEMO-VIDEO
 
@@ -21,7 +21,7 @@ A five-screen guide explains the game before the first round (Esc skips it, H br
 | Key | Does |
 | - | - |
 | Arrows / WASD | Move |
-| Space | Pulse: stuns hunters within 5 tiles for 3s. Collect the corner orbs for more |
+| Space | Pulse: stuns hunters within 5 tiles for 3s and breaks their walls, sludge and snares nearby. Collect the purple orbs for more |
 | L | Toggle 2s of extra inference lag |
 | T | Show or hide each hunter's current plan (the dashed line to its target) |
 | F | Fullscreen |
@@ -42,10 +42,10 @@ No LLM can steer a character 60 times a second, and it shouldn't try. Glowmaze s
  └──────────────────────────────┘   {intent, col, row, radio}
 ```
 
-- **Each hunter has its own async "brain" loop.** It takes a snapshot of what the team knows, asks Wafer for a decision, applies it, and repeats. Each hunter decides about every 650ms, so five hunters make about 7 decisions per second between them.
+- **Each hunter has its own async "brain" loop.** It takes a snapshot of what the team knows, asks Wafer for a decision, applies it, and repeats. Each hunter decides about every 800ms, so five hunters make about 6 decisions per second between them.
 - **The model decides; ordinary code moves.** A decision is a target tile, a short intent and an optional radio line. Breadth-first pathfinding walks the hunter there along the shortest route until the next decision arrives.
 - **Personalities come from the prompt alone.** Rook presses you, Vex intercepts, Moth guards the sparks, Grim herds you toward the others, and Pip fills the gaps. There's no hand-coded strategy.
-- **Decisions are made from a snapshot, so latency matters.** Everything moves while the request is in flight. At ~650ms you've moved about 4 tiles by the time a decision lands, which is close enough for the hunters' predictions to cover it. Add 2s and you're 17 tiles away.
+- **Decisions are made from a snapshot, so latency matters.** Everything moves while the request is in flight. At ~800ms you've moved about 5 tiles by the time a decision lands, which is close enough for the hunters' predictions to cover it. Add 2s and you're 18 tiles away, and powers land late too: Rook's wall drops where you were.
 
 ### Fog of war: they have to find you
 
@@ -54,6 +54,25 @@ Hunters see you only down a straight, unbroken corridor, or when they're right n
 - A coloured **sight line** means a hunter can see you, and a **!** appears when one spots you.
 - A red **?** marks the team's last sighting.
 - The badge in the corner reads **SPOTTED · Vex** or **HIDDEN 4.2s**.
+
+### Five hunters, five powers
+
+| Hunter | Power | Effect | Cooldown |
+| - | - | - | - |
+| Rook | Wall Slam | A wall seals one corridor tile for 6s | 15s |
+| Vex | Blink | Teleports to any tile at least 5 tiles from you | 20s |
+| Moth | Flare | Lights a 6-tile radius for 5s; inside it you're visible to the whole team | 15s |
+| Grim | Sludge | Up to 5 tiles of corridor at half speed for you, for 6s | 15s |
+| Pip | Snare | A hidden trap for 20s; stepping on it freezes you for 1.5s and reveals you | 20s |
+
+The model decides when and where to use a power (`usePower`, `powerCol`, `powerRow` in its JSON reply). Every decision includes whether the hunter's power is ready, the teammates' power status, and the active effects, so hunters set up combos on the radio ("Wall at J39, Vex blink there too").
+
+**The rules are enforced in code, not trusted to the model.**
+- A wall can't land within 3 tiles of you, on anyone, or anywhere that would cut you off from most of the maze.
+- Blink can't land within 5 tiles of you.
+- A snare can't be placed within 4 tiles of you, and Pip can have at most two set.
+- Every power flashes in the hunter's colour for 0.5s before it lands, and its legality is checked again when it fires.
+- An illegal request is rejected and nothing fires. A power that becomes illegal during its warning (say you stepped next to the wall tile) fizzles, and its cooldown is spent. The hunter's row in the HUD shows the reason, and the hunter is told on its next turn.
 
 ### Code calculates, the model decides
 
@@ -117,7 +136,7 @@ The default is **DeepSeek-V4-Flash-0731-Fast**, which Wafer serves for high thro
 | Output tokens per decision | ~38 (max 59) | ~46 (max 313) |
 | Decisions/sec, 5 hunters | ~7 | 2–3 |
 
-These were measured on an earlier, smaller 21×19 maze. On the current 37×23 maze, with fog of war and the tactics data, the prompt is about 1,300 tokens and DeepSeek's decisions take about 650ms p50 and 1,400ms p95.
+These were measured on an earlier, smaller 21×19 maze. On the current 37×23 maze, with fog of war and the tactics data, the prompt is about 1,300 tokens and DeepSeek's decisions take about 650ms p50 and 1,400ms p95. Adding powers roughly doubled the output (about 70 tokens per decision), which brings that to about 800ms p50 and 1,200ms p95.
 
 GLM-5.3-Flash costs less per token, but it was slower. Some decisions spent around 250 hidden reasoning tokens, a [documented quirk](https://docs.wafer.ai/serverless/chat-completions.md#reasoning): `reasoning_effort: "none"` doesn't fully stop reasoning on that model. At 1–2 seconds per decision, the hunters were already as slow as the lag switch is meant to make them. For a real-time app, the model with the fastest serving beats the cheapest one.
 
@@ -133,7 +152,7 @@ GLM-5.3-Flash costs less per token, but it was slower. Some decisions spent arou
 
 URL parameters for tuning: `?hs=6.0` sets hunter speed and `?ps=6.4` sets your speed, both in tiles per second.
 
-**Cost.** Each decision is about 1,300 prompt tokens (around 40% cached) and 35 output tokens. At about 400 decisions a minute on the default model, play costs roughly 4–6 cents a minute. The AI only runs while a round is in progress.
+**Cost.** Each decision is about 1,400 prompt tokens (around 40% cached) and 70 output tokens. At about 340 decisions a minute on the default model, play costs roughly 4–6 cents a minute. The AI only runs while a round is in progress.
 
 ## Developing without a key
 

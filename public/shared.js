@@ -40,6 +40,11 @@ export const HUNTERS = [
     persona:
       "You are Rook, the bruiser. Pressure the player directly and never let them rest. " +
       "Aim a couple of tiles ahead of the player along their heading rather than at their current tile.",
+    power: {
+      id: "wall", name: "Wall Slam", cooldown: 15, duration: 6,
+      what: "Drop a wall on one floor tile for 6s, sealing that corridor for everyone.",
+      advice: "Seal the escape the player is running toward, ahead of them, so a teammate can close in from behind.",
+    },
   },
   {
     id: "vex",
@@ -49,6 +54,11 @@ export const HUNTERS = [
     persona:
       "You are Vex, the interceptor. Predict where the player is going and get there first. " +
       "Pick the junction or corridor the player will reach in 4 to 8 tiles and cut it off.",
+    power: {
+      id: "blink", name: "Blink", cooldown: 20,
+      what: "Teleport yourself instantly to a floor tile at least 5 tiles from the player.",
+      advice: "Blink to the junction on the player's escape route that nobody can reach in time, or to the best search candidate.",
+    },
   },
   {
     id: "moth",
@@ -58,6 +68,11 @@ export const HUNTERS = [
     persona:
       "You are Moth, the guard. The player must collect every spark to win. " +
       "Stand watch near the area with the most sparks left, or the cluster the player is heading for.",
+    power: {
+      id: "flare", name: "Flare", cooldown: 15, duration: 5, radius: 6,
+      what: "Light up everything within 6 tiles of a floor tile for 5s; if the player is inside, the whole team sees them.",
+      advice: "Use it when the player is hidden, centred on the most likely candidate or between the top candidates.",
+    },
   },
   {
     id: "grim",
@@ -67,6 +82,11 @@ export const HUNTERS = [
     persona:
       "You are Grim, the herder. Stay a few tiles behind the player on the side away from your teammates, " +
       "so the player is pushed toward the others. Close in only when a teammate blocks the escape route.",
+    power: {
+      id: "sludge", name: "Sludge", cooldown: 15, duration: 6,
+      what: "Coat up to 5 tiles of a straight corridor around a floor tile for 6s; the player moves at half speed there.",
+      advice: "Coat the corridor the player must cross to escape, so they slow down while teammates close in.",
+    },
   },
   {
     id: "pip",
@@ -76,6 +96,11 @@ export const HUNTERS = [
     persona:
       "You are Pip, the trickster. Be unpredictable: bait, feint, and cover escape routes your teammates leave open. " +
       "Look at where teammates are going and fill the biggest gap around the player.",
+    power: {
+      id: "snare", name: "Snare", cooldown: 20, duration: 20,
+      what: "Hide a trap on a floor tile for 20s; if the player steps on it they freeze for 1.5s and are revealed.",
+      advice: "Place it on a junction the player is likely to run through, not where they already are.",
+    },
   },
 ];
 
@@ -86,7 +111,11 @@ export const DIRS = {
   right: [1, 0],
 };
 
-export const isFloor = (c, r) => MAZE[r]?.[c] === ".";
+// Temporary walls (Rook's Wall Slam) live here so movement, pathfinding and line of sight all respect
+// them. isOpen is the permanent maze; isFloor is "can be walked on right now".
+export const tempWalls = new Set(); // tile indexes r * COLS + c
+export const isOpen = (c, r) => MAZE[r]?.[c] === ".";
+export const isFloor = (c, r) => isOpen(c, r) && !tempWalls.has(r * COLS + c);
 
 export function neighbors(c, r) {
   const out = [];
@@ -95,7 +124,7 @@ export function neighbors(c, r) {
 }
 
 export const FLOOR_TILES = [];
-for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (isFloor(c, r)) FLOOR_TILES.push([c, r]);
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) if (isOpen(c, r)) FLOOR_TILES.push([c, r]);
 
 /** Nearest floor tile to an arbitrary (possibly invalid) coordinate. */
 export function nearestFloor(c, r) {
