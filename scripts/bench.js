@@ -40,7 +40,7 @@ const STATE = {
   sparks: { left: 96, byArea: { NW: 18, NE: 27, SW: 22, SE: 29 }, nearestToPlayer: [6, 11] },
 };
 
-async function once(model) {
+async function once(model, attempt = 0) {
   const t0 = performance.now();
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
@@ -50,6 +50,11 @@ async function once(model) {
       messages: [{ role: "system", content: SYSTEM.vex }, { role: "user", content: JSON.stringify(STATE) }],
     }),
   });
+  if (res.status === 429 && attempt < 3) {
+    // Wafer sheds load with 429 + Retry-After rather than queueing; honour it and try again
+    await new Promise((r) => setTimeout(r, (Number(res.headers.get("retry-after")) || 1) * 1000));
+    return once(model, attempt + 1);
+  }
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 140)}`);
   let ttft = null, text = "", buf = "", usage = null;
   const dec = new TextDecoder();
@@ -85,6 +90,10 @@ for (const model of models) {
   let error;
   for (let i = 0; i < RUNS; i++) {
     try { r.push(await once(model)); } catch (e) { error = e.message; break; }
+  }
+  if (error?.startsWith("402")) {
+    console.error("\nOut of Wafer credits. Add some at https://app.wafer.ai and run again.");
+    process.exit(1);
   }
   const row = {
     model,
