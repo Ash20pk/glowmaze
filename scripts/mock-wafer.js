@@ -17,7 +17,7 @@ http
     let raw = "";
     for await (const c of req) raw += c;
     const body = JSON.parse(raw);
-    const who = body.messages[0].content.match(/You control (\w+)/)?.[1] ?? "Rook";
+    const who = body.messages[0].content.match(/You control (\w+)\.$/m)?.[1] ?? "Rook";
     const s = JSON.parse(body.messages[1].content);
     const pick = {
       Rook: s.player.in3Tiles,

@@ -40,15 +40,15 @@ No LLM can steer a character 60 times a second, and it shouldn't try. Glowmaze s
  └──────────────────────────────┘   {intent, col, row, radio}
 ```
 
-- **Each hunter has its own async "brain" loop.** It takes a snapshot of the game: its position, your position and heading, where you'll be in 3 and 6 tiles, teammates' positions and intents, the last few radio lines, and where the sparks are left. It asks Wafer for a decision, applies it, and repeats. Five hunters make about 15–20 decisions per second between them.
+- **Each hunter has its own async "brain" loop.** It takes a snapshot of the game: its position, your position and heading, where you'll be in 3 and 6 tiles, teammates' positions and intents, the last few radio lines, and where the sparks are left. It asks Wafer for a decision, applies it, and repeats. Each hunter makes a decision about every 700ms, so five hunters make about 7 decisions per second between them.
 - **The model decides; ordinary code moves.** A decision is a target tile, a short intent and an optional radio line. Breadth-first pathfinding walks the hunter there along the shortest route until the next decision arrives.
 - **Personalities come from the prompt alone.** Rook presses you, Vex intercepts, Moth guards the sparks, Grim herds you toward the others, and Pip fills the gaps. There's no hand-coded strategy.
-- **Decisions are made from a snapshot, so latency matters.** Everything moves while the request is in flight. At ~250ms the snapshot is still accurate when the decision lands. At 2s, you're 12 tiles away from it.
+- **Decisions are made from a snapshot, so latency matters.** Everything moves while the request is in flight. At ~650ms, you've moved about 4 tiles by the time a decision lands, which is close enough for the hunters' predictions to cover it. Add 2s and you're 17 tiles away.
 
 ### Details worth stealing
 
 - **Structured output.** The response uses `response_format: json_schema` with `strict: true`, so every reply parses and the game never stalls on malformed text. The target is also snapped to the nearest floor tile, in case the model picks a wall.
-- **Prompt caching by design.** The system prompt (the maze, rules and persona) never changes for a given hunter, and only the small JSON state in the user message does. Wafer's prompt cache reuses the static prefix, and the HUD shows the cached share live.
+- **A cache-friendly prompt.** The system prompt never changes. The maze, rules and output format come first and are identical for all five hunters, the persona comes last, and only the small JSON state in the user message varies. The HUD shows how much of the prompt Wafer served from its cache. In our runs that was about 25% during play and 63% for one hunter calling repeatedly.
 - **Reasoning off.** `reasoning_effort: "none"`. A hunter needs a fast, good-enough decision, not a long thought.
 - **Stale decisions are dropped.** Every life increments an `epoch`. A decision that comes back after you were caught is ignored rather than applied to the new round.
 - **Backpressure.** Wafer sheds load with `429` and `Retry-After` instead of queueing. A brain loop that gets one waits as instructed, keeps its old target, and shows the error in the HUD. Nothing is hidden.
@@ -84,24 +84,34 @@ jq -s 'map(select(.ok) | .totalMs) | sort | .[length/2|floor]' logs/decisions.js
 
 ```bash
 npm run bench                                  # whole catalog, 8 runs each
-npm run bench -- GLM-5.3-Flash DeepSeek-V4-Flash-0731-Fast --runs 20
+npm run bench -- DeepSeek-V4-Flash-0731-Fast GLM-5.3-Flash --runs 20
 ```
 
-The default is **GLM-5.3-Flash**, the cheapest model in Wafer's catalog ($0.05 per million input tokens, $0.03 cached, $0.20 output). Input is almost all of this game's spend, so it's cheapest by a wide margin. Wafer's docs note that on this model `reasoning_effort: "none"` doesn't fully stop hidden reasoning, so the server leaves `max_tokens` at 600 to keep the JSON decision from being cut off.
+The default is **DeepSeek-V4-Flash-0731-Fast**, which Wafer serves for high throughput. We started on GLM-5.3-Flash, the cheapest model in the catalog, and measured both in real play on 9 November 2026:
+
+| | DeepSeek-V4-Flash-0731-Fast | GLM-5.3-Flash |
+| - | - | - |
+| Decision latency p50 | **~670ms** | 1,000–2,300ms |
+| Decision latency p95 | ~1,000ms | 3,000–6,000ms |
+| First token p50 | ~390ms | 400–2,200ms |
+| Output tokens per decision | ~38 (max 59) | ~46 (max 313) |
+| Decisions/sec, 5 hunters | ~7 | 2–3 |
+
+GLM-5.3-Flash costs less per token, but it was slower. Some decisions spent around 250 hidden reasoning tokens, a [documented quirk](https://docs.wafer.ai/serverless/chat-completions.md#reasoning): `reasoning_effort: "none"` doesn't fully stop reasoning on that model. At 1–2 seconds per decision, the hunters were already as slow as the lag switch is meant to make them. For a real-time app, the model with the fastest serving beats the cheapest one.
 
 ## Configuration
 
 | Variable | Default | |
 | - | - | - |
 | `WAFER_API_KEY` | (required) | From [app.wafer.ai](https://app.wafer.ai) |
-| `WAFER_MODEL` | `GLM-5.3-Flash` | Any ID from `GET https://pass.wafer.ai/v1/models` |
+| `WAFER_MODEL` | `DeepSeek-V4-Flash-0731-Fast` | Any ID from `GET https://pass.wafer.ai/v1/models` |
 | `WAFER_REASONING_EFFORT` | `none` | |
 | `MAX_DECISIONS_PER_MIN` | `1500` | Local spend guard. Requests beyond it are refused before they reach Wafer |
 | `PORT` | `3000` | |
 
 URL parameters for tuning: `?hs=6.0` sets hunter speed and `?ps=6.4` sets your speed, both in tiles per second.
 
-**Cost.** Each decision is about 1,000 prompt tokens, mostly cached, plus about 30 output tokens. At around 1,000 decisions a minute on GLM-5.3-Flash, play costs roughly 3–6 cents a minute. The AI only runs while a round is in progress.
+**Cost.** Each decision is about 820 prompt tokens and 40 output tokens. At about 420 decisions a minute on the default model, play costs roughly 3–5 cents a minute. The AI only runs while a round is in progress.
 
 ## Developing without a key
 
