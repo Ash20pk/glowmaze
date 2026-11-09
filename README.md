@@ -2,7 +2,7 @@
 
 A neon maze-chase arcade game where all five hunters are controlled live by an LLM running on [Wafer](https://wafer.ai). They can only see you down a straight corridor, so they have to **find** you: they share sightings on a team radio, split up to search where you could have gone, and claim escape routes to trap you. Each hunter also has a power that bends the map, and the AI decides when and where to use it.
 
-**Play it: [glowmaze.vercel.app](https://glowmaze.vercel.app)**
+**Play it: [glowmaze-one.vercel.app](https://glowmaze-one.vercel.app)**
 
 The game includes a **lag switch**. Press `L` and every AI decision arrives 2 seconds later. The hunters start chasing where you *used to be*, and you walk away. Press it again and they close in. That's the point of the demo: **in a real-time app, inference latency is your product's reaction time.**
 
