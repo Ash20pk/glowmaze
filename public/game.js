@@ -155,7 +155,7 @@ function resetPositions() {
 }
 
 function newGame() {
-  Object.assign(game, { level: 1, score: 0, lives: 3, pulses: 1, phase: "play", startedAt: performance.now() });
+  Object.assign(game, { level: 1, score: 0, lives: 3, pulses: 1, phase: "play", startedAt: performance.now(), lastInputAt: performance.now() });
   radioLog.length = 0;
   renderRadio();
   resetBoard();
@@ -164,7 +164,9 @@ function newGame() {
 
 // ---------- input ----------
 const KEYMAP = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", w: "up", s: "down", a: "left", d: "right" };
+const IDLE_PAUSE_MS = 45_000; // a forgotten tab shouldn't keep spending inference credits
 addEventListener("keydown", (e) => {
+  game.lastInputAt = performance.now();
   if (game.phase === "guide") return; // the onboarding screens handle their own keys
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (KEYMAP[k]) {
@@ -762,6 +764,10 @@ function update(dt, now) {
     game.phase = "play";
   }
   if (game.phase !== "play") return;
+  if (!AUTOPILOT && now - game.lastInputAt > IDLE_PAUSE_MS) {
+    game.paused = true;
+    return;
+  }
   tickEffects(now);
   movePlayer(dt);
   for (const h of hunters) moveHunter(h, dt, now);
@@ -1025,7 +1031,7 @@ function draw(now) {
   else if (game.phase === "over") banner("GAME OVER", `SCORE ${game.score} · ENTER TO RETRY`, "#ff3b5c");
   else if (game.phase === "caught") banner("CAUGHT", `by ${game.caughtBy?.name ?? "the hunters"}`, game.caughtBy?.color ?? "#ff3b5c");
   else if (game.phase === "clear") banner("BOARD CLEAR", `LEVEL ${game.level + 1} · HUNTERS GET FASTER`, "#4dffb0");
-  else if (game.paused) banner("PAUSED", "P TO RESUME", "#7c84a3");
+  else if (game.paused) banner("PAUSED", now - game.lastInputAt > IDLE_PAUSE_MS ? "STILL THERE? PRESS P TO RESUME" : "P TO RESUME", "#7c84a3");
   if (game.phase === "play") {
     const sighted = intel.by.filter((b) => b !== "ping");
     const label = !intel.visible
@@ -1254,6 +1260,7 @@ function showGuide() {
   game.phase = "guide";
   openGuide(() => {
     game.paused = false;
+    game.lastInputAt = performance.now();
     if (resumeTo) game.phase = resumeTo;
     else newGame();
   });

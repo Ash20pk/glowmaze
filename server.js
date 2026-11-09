@@ -1,9 +1,9 @@
-// Glowmaze server.
+// Glowmaze local server: the same game as the Vercel deployment, for development.
 //
-//  - Serves the game.
-//  - POST /api/decide: one hunter decision. Builds that hunter's prompt, calls Wafer chat
-//    completions (streamed, JSON-schema output), times the call, and returns the decision.
+//  - Serves public/ and the two API routes (/api/decide, /api/config).
+//  - The decision logic is shared with the Vercel function: lib/decide.js.
 //  - Logs every decision to logs/decisions.jsonl and prints a rolling latency summary.
+//  - Warns the page when prompt.js / shared.js changed since startup (restart needed).
 //
 // The Wafer key stays here; the browser never sees it. No dependencies.
 
@@ -12,25 +12,19 @@ import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nearestFloor, HUNTERS } from "./public/shared.js";
-import { SYSTEM, SCHEMA } from "./prompt.js";
-
-const NAMES = Object.fromEntries(HUNTERS.map((h) => [h.id, h.name]));
+import { decide, config } from "./lib/decide.js";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 loadDotEnv(join(ROOT, ".env"));
 
 const PORT = Number(process.env.PORT || 3000);
-const KEY = process.env.WAFER_API_KEY;
-const BASE = (process.env.WAFER_BASE_URL || "https://pass.wafer.ai/v1").replace(/\/$/, "");
-const MODEL = process.env.WAFER_MODEL || "DeepSeek-V4-Flash-0731-Fast";
-const EFFORT = process.env.WAFER_REASONING_EFFORT || "none";
+const { key: KEY, model: MODEL, effort: EFFORT } = config();
 const MAX_PER_MIN = Number(process.env.MAX_DECISIONS_PER_MIN || 1500); // spend guard
 const LOG = join(ROOT, "logs", "decisions.jsonl");
 
 // The server reads prompt.js and shared.js once at startup. If they change while it runs, the page
 // (served fresh) and the AI's instructions drift apart, so the page is told to ask for a restart.
-const SERVER_FILES = ["server.js", "prompt.js", "public/shared.js"].map((f) => join(ROOT, f));
+const SERVER_FILES = ["server.js", "prompt.js", "lib/decide.js", "public/shared.js"].map((f) => join(ROOT, f));
 const codeSignature = () => SERVER_FILES.map((f) => statSync(f).mtimeMs).join(",");
 const STARTED_WITH = codeSignature();
 
@@ -63,7 +57,7 @@ http
   .createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
-      if (req.method === "POST" && url.pathname === "/api/decide") return await decide(req, res);
+      if (req.method === "POST" && url.pathname === "/api/decide") return await handleDecide(req, res);
       if (req.method === "GET" && url.pathname === "/api/config")
         return json(res, 200, { model: MODEL, reasoningEffort: EFFORT, stale: codeSignature() !== STARTED_WITH });
       if (req.method === "GET") return await serveStatic(url.pathname, res);
@@ -79,126 +73,15 @@ http
     console.log(`Every hunter decision is logged to logs/decisions.jsonl`);
   });
 
-async function decide(req, res) {
-  const { hunterId, state, epoch } = await readJson(req);
-  if (!SYSTEM[hunterId]) return json(res, 400, { error: "unknown hunter" });
+async function handleDecide(req, res) {
+  const input = await readJson(req);
   if (++minuteCount > MAX_PER_MIN) return json(res, 429, { error: "local spend guard", retryAfter: 5 });
-
-  const t0 = performance.now();
-  const record = { ts: new Date().toISOString(), hunter: hunterId, epoch, model: MODEL, ok: false };
-  let upstream;
-  try {
-    upstream = await fetch(`${BASE}/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: MODEL,
-        stream: true,
-        // A decision is ~40 tokens. The headroom matters on models where reasoning_effort "none"
-        // still spends hidden reasoning tokens (GLM-5.3-Flash), which would otherwise truncate the JSON.
-        max_tokens: 300,
-        temperature: 0.6,
-        reasoning_effort: EFFORT,
-        response_format: SCHEMA,
-        messages: [
-          { role: "system", content: SYSTEM[hunterId] },
-          { role: "user", content: JSON.stringify(state) },
-        ],
-      }),
-    });
-  } catch (err) {
-    return finish(res, record, t0, 502, { error: `network: ${err.message}` });
-  }
-
-  if (!upstream.ok) {
-    const body = await upstream.text();
-    const retryAfter = Number(upstream.headers.get("retry-after")) || 1;
-    let code = "";
-    try {
-      code = JSON.parse(body).error?.code || "";
-    } catch {}
-    return finish(res, record, t0, upstream.status, { error: `wafer ${upstream.status} ${code}`.trim(), retryAfter });
-  }
-
-  let ttft = null;
-  let text = "";
-  let usage = null;
-  let buf = "";
-  const dec = new TextDecoder();
-  for await (const chunk of upstream.body) {
-    buf += dec.decode(chunk, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf("\n")) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line.startsWith("data:") || line.endsWith("[DONE]")) continue;
-      let evt;
-      try {
-        evt = JSON.parse(line.slice(5));
-      } catch {
-        continue;
-      }
-      if (evt.usage) usage = evt.usage;
-      const piece = evt.choices?.[0]?.delta?.content;
-      if (piece) {
-        ttft ??= performance.now() - t0;
-        text += piece;
-      }
-    }
-  }
-
-  record.ttftMs = ttft == null ? null : Math.round(ttft);
-  record.promptTokens = usage?.prompt_tokens ?? null;
-  record.cachedTokens = usage?.prompt_tokens_details?.cached_tokens ?? null;
-  record.completionTokens = usage?.completion_tokens ?? null;
-
-  let decision;
-  try {
-    decision = JSON.parse(text);
-  } catch {
-    record.raw = text.slice(0, 200);
-    return finish(res, record, t0, 502, { error: "unparseable decision" });
-  }
-  const [col, row] = nearestFloor(Math.round(decision.col), Math.round(decision.row));
-  const clean = {
-    intent: String(decision.intent || "").slice(0, 60),
-    col,
-    row,
-    // models sometimes sign their own messages ("Moth: ...") even when told not to; the UI already shows who spoke
-    radio: String(decision.radio || "")
-      .replace(new RegExp(`^\\s*${NAMES[hunterId]}\\s*(here)?\\s*[:,-]\\s*`, "i"), "")
-      .slice(0, 80),
-    orders: (Array.isArray(decision.orders) ? decision.orders : [])
-      .slice(0, 4)
-      .map((o) => ({ name: String(o?.name || "").slice(0, 12), junction: String(o?.junction || "").slice(0, 4) })),
-    usePower: decision.usePower === true,
-    ...(decision.usePower === true
-      ? (([pc, pr]) => ({ powerCol: pc, powerRow: pr }))(nearestFloor(Math.round(decision.powerCol), Math.round(decision.powerRow)))
-      : {}),
-  };
-  record.ok = true;
-  record.decision = clean;
-  return finish(res, record, t0, 200, { decision: clean });
-}
-
-function finish(res, record, t0, status, body) {
-  record.totalMs = Math.round(performance.now() - t0);
-  record.status = status;
-  if (!record.ok) record.error = body.error;
+  const { status, body, record } = await decide({ hunterId: input.hunterId, state: input.state, epoch: input.epoch });
   recent.push({ at: Date.now(), ok: record.ok, totalMs: record.totalMs, ttftMs: record.ttftMs });
   mkdir(join(ROOT, "logs"), { recursive: true })
     .then(() => appendFile(LOG, JSON.stringify(record) + "\n"))
     .catch(() => {});
-  json(res, status, {
-    ...body,
-    timing: {
-      ttftMs: record.ttftMs ?? null,
-      totalMs: record.totalMs,
-      promptTokens: record.promptTokens ?? null,
-      cachedTokens: record.cachedTokens ?? null,
-      completionTokens: record.completionTokens ?? null,
-    },
-  });
+  json(res, status, body);
 }
 
 // ---------- plumbing ----------

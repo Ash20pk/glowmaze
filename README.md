@@ -2,16 +2,16 @@
 
 A neon maze-chase arcade game where all five hunters are controlled live by an LLM running on [Wafer](https://wafer.ai). They can only see you down a straight corridor, so they have to **find** you: they share sightings on a team radio, split up to search where you could have gone, and claim escape routes to trap you. Each hunter also has a power that bends the map, and the AI decides when and where to use it.
 
-https://github.com/user-attachments/assets/REPLACE-WITH-DEMO-VIDEO
+**Play it: [glowmaze.vercel.app](https://glowmaze.vercel.app)**
 
 The game includes a **lag switch**. Press `L` and every AI decision arrives 2 seconds later. The hunters start chasing where you *used to be*, and you walk away. Press it again and they close in. That's the point of the demo: **in a real-time app, inference latency is your product's reaction time.**
 
 ## Quickstart
 
-You need Node 18 or newer. There are no dependencies and no build step.
+You need Node 20 or newer. There are no dependencies and no build step.
 
 ```bash
-git clone <this repo> && cd glowmaze
+git clone https://github.com/Ash20pk/glowmaze && cd glowmaze
 cp .env.example .env      # add your key from https://app.wafer.ai
 npm start                 # → http://localhost:3000
 ```
@@ -172,10 +172,47 @@ npm run dev:mock    # terminal 2: the game, pointed at the mock
 
 The mock streams responses in Wafer's format with 180–320ms of fake latency, but its decisions come from a **hand-written heuristic, not a model**. Use it to work on the game, never to quote numbers. Add `?autopilot&autostart` to the URL and a simple bot plays for you.
 
+## Deploying to Vercel
+
+The repo deploys as-is: `public/` is served statically and `api/decide.js` / `api/config.js` become Vercel Functions that share `lib/decide.js` with the local server.
+
+```bash
+vercel link
+vercel env add WAFER_API_KEY production   # paste the key when prompted
+vercel --prod
+```
+
+### Production safeguards
+
+A public endpoint spends your Wafer credits, so the deployment is defensive:
+
+- **The key never reaches the browser.** It lives only in the Vercel env var. Wafer error bodies (which can mention your credit balance) are never passed through.
+- **Rate limits** (`lib/guard.js`): a per-client token bucket (12 decisions/sec, burst 30, which a real game never hits), 500 decisions per client per minute, and a per-instance ceiling (`MAX_DECISIONS_PER_MIN`, default 3000).
+- **Input limits:** requests over 16KB are rejected, as are unknown hunters and other sites' origins.
+- **The game stops spending when nobody's playing:** the AI is idle on the title screen, in the guide, while paused, when the tab is hidden, and after 45s with no keyboard input.
+- **Structured output** (`json_schema`, `strict`), with every target snapped to a real floor tile and powers and orders validated in code.
+- **Logs:** each decision is one JSON line in Vercel's runtime logs (`type: "decision"`), with timings, tokens and status.
+- **Security headers:** `nosniff`, `X-Frame-Options: DENY`, a strict referrer policy and a permissions policy.
+
+The limits are in memory, so they apply per function instance. They stop casual abuse, not a distributed attack. Wafer credits are prepaid, which caps the worst case at your balance.
+
+## Tests
+
+```bash
+npm test        # maze integrity, line of sight, temporary walls, decision parsing, rate limiter
+npm run check   # syntax-check every file
+```
+
+CI runs both on every push (`.github/workflows/ci.yml`).
+
 ## Project layout
 
 ```
-server.js              serves the game, calls Wafer per decision, logs timings
+server.js              local dev server: static files + API, decision log, stale-code warning
+api/decide.js          Vercel Function: guards + one hunter decision
+api/config.js          Vercel Function: model info for the page
+lib/decide.js          the Wafer call: prompt, streaming, timing, cleaning (shared)
+lib/guard.js           rate limits and origin check for the public endpoint
 prompt.js              hunter system prompts + JSON schema (shared with the bench)
 public/shared.js       maze, hunter personalities, pathfinding (browser + server)
 public/tactics.js      junctions, line of sight, escape routes, search candidates
@@ -185,6 +222,7 @@ public/index.html      page
 public/style.css       styles
 scripts/bench.js       decision-latency benchmark across Wafer models
 scripts/mock-wafer.js  offline stand-in for development
+test/                  node:test suites
 ```
 
 ## License

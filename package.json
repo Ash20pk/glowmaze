@@ -4,9 +4,13 @@
   "description": "A neon maze chase where five hunters are driven live by an LLM on Wafer.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "check": "for f in server.js prompt.js lib/*.js api/*.js public/*.js scripts/*.js; do node --check $f || exit 1; done",
     "mock": "node scripts/mock-wafer.js",
     "dev:mock": "WAFER_BASE_URL=http://localhost:4999/v1 WAFER_API_KEY=mock node server.js",
     "bench": "node scripts/bench.js"
