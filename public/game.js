@@ -22,6 +22,9 @@ const LAG_MS = 2000;
 const MIN_DECISION_GAP_MS = 150; // the chaser re-decides almost back-to-back
 const COVER_DECISION_GAP_MS = 600; // covers mostly follow the chaser's orders, so they think less often
 const PING_FRESH_MS = 400; // you count as "pinging" while you've moved this recently
+// A decision that takes longer than this is stale before it lands: drop it and ask again with a
+// fresh snapshot instead of waiting on a slow tail request.
+const DECISION_TIMEOUT_MS = 2500;
 const PLAYER_SPEED = Number(params.get("ps")) || 6.4; // tiles per second
 const HUNTER_SPEED = Number(params.get("hs")) || 6.0; // a touch slower than you: they win by trapping, not racing
 const STUN_MS = 3000;
@@ -317,10 +320,11 @@ async function brain(h) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hunterId: h.id, epoch, state }),
+        signal: AbortSignal.timeout(DECISION_TIMEOUT_MS),
       });
       body = await res.json();
     } catch (err) {
-      body = { error: err.message };
+      body = { error: err.name === "TimeoutError" ? `slow decision (>${DECISION_TIMEOUT_MS / 1000}s), re-asking` : err.message, retryAfter: 0 };
     }
     if (game.lag) await sleep(LAG_MS);
     h.thinking = false;
@@ -346,7 +350,7 @@ async function brain(h) {
       else autoPower(h, state, performance.now());
     } else if (!ok) {
       h.intent = `⚠ ${body.error || "error"}`;
-      await sleep((body.retryAfter || 1) * 1000);
+      await sleep((body.retryAfter ?? 1) * 1000);
     }
     const gap = h.role === "chaser" ? MIN_DECISION_GAP_MS : COVER_DECISION_GAP_MS;
     await sleepOrWake(h, Math.max(0, gap - (performance.now() - t0)));

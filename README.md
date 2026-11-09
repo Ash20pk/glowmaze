@@ -98,7 +98,7 @@ The result is visible on the radio. Hunters claim and divide routes ("Moth: taki
 - **Structured output.** The response uses `response_format: json_schema` with `strict: true`, so every reply parses and the game never stalls on malformed text. The target is also snapped to the nearest floor tile, in case the model picks a wall.
 - **A cache-friendly prompt.** The system prompt never changes. The maze, rules and output format come first and are identical for all five hunters, the persona comes last, and only the small JSON state in the user message varies. The HUD shows how much of the prompt Wafer served from its cache. In our runs that was about 40% during play.
 - **Reasoning off.** `reasoning_effort: "none"`. A hunter needs a fast, good-enough decision, not a long thought.
-- **Stale decisions are dropped.** Every life increments an `epoch`. A decision that comes back after you were caught is ignored rather than applied to the new round.
+- **Stale decisions are dropped.** Every life increments an `epoch`. A decision that comes back after you were caught is ignored rather than applied to the new round. A request that takes longer than 2.5s is abandoned and re-asked with a fresh snapshot, because in a real-time game a late answer is a wrong answer. These count as errors in the HUD.
 - **Backpressure.** Wafer sheds load with `429` and `Retry-After` instead of queueing. A brain loop that gets one waits as instructed, keeps its old target, and shows the error in the HUD. Nothing is hidden.
 
 ## Reading the HUD
