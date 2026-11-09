@@ -21,7 +21,7 @@ loadDotEnv(join(ROOT, ".env"));
 const PORT = Number(process.env.PORT || 3000);
 const KEY = process.env.WAFER_API_KEY;
 const BASE = (process.env.WAFER_BASE_URL || "https://pass.wafer.ai/v1").replace(/\/$/, "");
-const MODEL = process.env.WAFER_MODEL || "DeepSeek-V4-Flash-0731-Fast";
+const MODEL = process.env.WAFER_MODEL || "GLM-5.3-Flash"; // the cheapest model in the catalog
 const EFFORT = process.env.WAFER_REASONING_EFFORT || "none";
 const MAX_PER_MIN = Number(process.env.MAX_DECISIONS_PER_MIN || 1500); // spend guard
 const LOG = join(ROOT, "logs", "decisions.jsonl");
@@ -86,7 +86,9 @@ async function decide(req, res) {
       body: JSON.stringify({
         model: MODEL,
         stream: true,
-        max_tokens: 150,
+        // Headroom: on GLM-5.3-Flash, reasoning_effort "none" can still spend hidden reasoning tokens,
+        // which count toward max_tokens. Too low a cap truncates the JSON decision.
+        max_tokens: 600,
         temperature: 0.6,
         reasoning_effort: EFFORT,
         response_format: SCHEMA,

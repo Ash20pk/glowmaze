@@ -87,21 +87,21 @@ npm run bench                                  # whole catalog, 8 runs each
 npm run bench -- GLM-5.3-Flash DeepSeek-V4-Flash-0731-Fast --runs 20
 ```
 
-<!-- BENCH RESULTS -->
+The default is **GLM-5.3-Flash**, the cheapest model in Wafer's catalog ($0.05 per million input tokens, $0.03 cached, $0.20 output). Input is almost all of this game's spend, so it's cheapest by a wide margin. Wafer's docs note that on this model `reasoning_effort: "none"` doesn't fully stop hidden reasoning, so the server leaves `max_tokens` at 600 to keep the JSON decision from being cut off.
 
 ## Configuration
 
 | Variable | Default | |
 | - | - | - |
 | `WAFER_API_KEY` | (required) | From [app.wafer.ai](https://app.wafer.ai) |
-| `WAFER_MODEL` | `DeepSeek-V4-Flash-0731-Fast` | Any ID from `GET https://pass.wafer.ai/v1/models` |
+| `WAFER_MODEL` | `GLM-5.3-Flash` | Any ID from `GET https://pass.wafer.ai/v1/models` |
 | `WAFER_REASONING_EFFORT` | `none` | |
 | `MAX_DECISIONS_PER_MIN` | `1500` | Local spend guard. Requests beyond it are refused before they reach Wafer |
 | `PORT` | `3000` | |
 
 URL parameters for tuning: `?hs=6.0` sets hunter speed and `?ps=6.4` sets your speed, both in tiles per second.
 
-**Cost.** Each decision is about 1,000 prompt tokens, mostly cached, plus about 30 output tokens. At around 1,000 decisions a minute on the default model, play costs roughly 5–15 cents a minute. The AI only runs while a round is in progress.
+**Cost.** Each decision is about 1,000 prompt tokens, mostly cached, plus about 30 output tokens. At around 1,000 decisions a minute on GLM-5.3-Flash, play costs roughly 3–6 cents a minute. The AI only runs while a round is in progress.
 
 ## Developing without a key
 

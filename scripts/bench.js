@@ -46,7 +46,7 @@ async function once(model, attempt = 0) {
     method: "POST",
     headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model, stream: true, max_tokens: 150, temperature: 0.6, reasoning_effort: "none", response_format: SCHEMA,
+      model, stream: true, max_tokens: 600, temperature: 0.6, reasoning_effort: "none", response_format: SCHEMA,
       messages: [{ role: "system", content: SYSTEM.vex }, { role: "user", content: JSON.stringify(STATE) }],
     }),
   });
